@@ -177,6 +177,9 @@ pub struct ProjectStats {
     pub high_complexity_count: usize,
 }
 
+/// Maximum number of messages retained in the log to prevent unbounded growth.
+const MAX_MESSAGES: usize = 1_000;
+
 impl App {
     pub fn new(project_root: &Path) -> Result<Self> {
         let (tx, rx) = mpsc::channel(64);
@@ -204,6 +207,15 @@ impl App {
             pending_actions: Vec::new(),
             apply_all: false,
         })
+    }
+
+    /// Append a message to the log, evicting old entries if over the cap.
+    pub fn push_message(&mut self, msg: Message) {
+        self.messages.push(msg);
+        if self.messages.len() > MAX_MESSAGES {
+            let drain = self.messages.len() - MAX_MESSAGES;
+            self.messages.drain(0..drain);
+        }
     }
 
     // ── Main loop ──────────────────────────────────────────────────────────
@@ -411,7 +423,7 @@ impl App {
         self.input.clear();
         self.cursor_pos = 0;
 
-        self.messages.push(Message::user(&input));
+        self.push_message(Message::user(&input));
         self.dispatch_command(input);
     }
 
@@ -426,7 +438,7 @@ impl App {
     fn run_perspectives(&mut self, perspective: String) {
         match &self.python_bridge {
             None => {
-                self.messages.push(Message::system(
+                self.push_message(Message::system(
                     "AI bridge is starting up — please wait a moment and try again.",
                 ));
             }
@@ -435,7 +447,7 @@ impl App {
                 let root = self.project_root.clone();
                 let tx = self.bg_tx.clone();
                 self.mode = AppMode::Analyzing;
-                self.messages.push(Message::system(format!(
+                self.push_message(Message::system(format!(
                     "Running {} analysis...",
                     if perspective == "all" { "full".to_string() } else { perspective.clone() }
                 )));
@@ -451,12 +463,12 @@ impl App {
     fn send_llm_query(&mut self, text: String) {
         match &self.python_bridge {
             None => {
-                self.messages.push(Message::system(
+                self.push_message(Message::system(
                     "AI bridge is starting up — please wait a moment and try again.",
                 ));
             }
             Some(_) if !self.llm_available => {
-                self.messages.push(Message::system(
+                self.push_message(Message::system(
                     "No LLM configured. Add ANTHROPIC_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY) to .env and restart.",
                 ));
             }
@@ -502,7 +514,7 @@ impl App {
             let bridge = match &self.python_bridge {
                 Some(b) => b.clone(),
                 None => {
-                    self.messages.push(Message::error("Bridge not available."));
+                    self.push_message(Message::error("Bridge not available."));
                     self.mode = AppMode::Ready;
                     return;
                 }
@@ -538,7 +550,7 @@ impl App {
                 // no event needed — fire and forget
                 drop(tx);
             });
-            self.messages.push(Message::system("Skipped."));
+            self.push_message(Message::system("Skipped."));
             self.show_next_pending_action();
         }
     }
@@ -553,7 +565,7 @@ impl App {
                 }
             });
         }
-        self.messages.push(Message::system("Skipped all proposed actions."));
+        self.push_message(Message::system("Skipped all proposed actions."));
         self.apply_all = false;
         self.mode = AppMode::Ready;
     }
@@ -563,7 +575,7 @@ impl App {
             if self.apply_all {
                 self.apply_next_action();
             } else {
-                self.messages.push(Message::assistant(format!(
+                self.push_message(Message::assistant(format!(
                     "**[{} — {}]**\n{}\n\n[y] Apply  [n] Skip  [a] Apply all  [q] Skip all",
                     next.action_type, next.description, next.preview,
                 )));
@@ -579,7 +591,7 @@ impl App {
         let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
         match parts[0] {
             "/help" => {
-                self.messages.push(Message::assistant(
+                self.push_message(Message::assistant(
                     "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /act <instruction>  — ask AI to make changes (with diff preview + confirm)\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
                 ));
             }
@@ -587,11 +599,11 @@ impl App {
                 self.should_quit = true;
             }
             "/scan" => {
-                self.messages.push(Message::system("Scanning project..."));
+                self.push_message(Message::system("Scanning project..."));
                 self.start_background_index();
             }
             "/index" => {
-                self.messages.push(Message::system("Indexing project..."));
+                self.push_message(Message::system("Indexing project..."));
                 self.start_background_index();
             }
             "/analyze" | "/analyse" => {
@@ -609,7 +621,7 @@ impl App {
             "/act" => {
                 let query = parts.get(1).copied().unwrap_or("").trim().to_string();
                 if query.is_empty() {
-                    self.messages.push(Message::error("Usage: /act <instruction>"));
+                    self.push_message(Message::error("Usage: /act <instruction>"));
                 } else {
                     self.send_action_query(query);
                 }
@@ -618,7 +630,7 @@ impl App {
                 self.messages.clear();
             }
             _ => {
-                self.messages.push(Message::error(format!("Unknown command: {}. Type /help.", parts[0])));
+                self.push_message(Message::error(format!("Unknown command: {}. Type /help.", parts[0])));
             }
         }
     }
@@ -629,12 +641,12 @@ impl App {
             "" => {
                 // List sessions
                 match &self.python_bridge {
-                    None => self.messages.push(Message::system("AI bridge not ready.")),
+                    None => self.push_message(Message::system("AI bridge not ready.")),
                     Some(bridge) => {
                         let bridge = bridge.clone();
                         let root = self.project_root.clone();
                         let tx = self.bg_tx.clone();
-                        self.messages.push(Message::system("Fetching sessions..."));
+                        self.push_message(Message::system("Fetching sessions..."));
                         tokio::spawn(async move {
                             if let Err(e) = bridge.list_sessions(root).await {
                                 let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
@@ -645,7 +657,7 @@ impl App {
             }
             "new" => {
                 match &self.python_bridge {
-                    None => self.messages.push(Message::system("AI bridge not ready.")),
+                    None => self.push_message(Message::system("AI bridge not ready.")),
                     Some(bridge) => {
                         let bridge = bridge.clone();
                         let tx = self.bg_tx.clone();
@@ -660,15 +672,15 @@ impl App {
             "load" => {
                 let session_id = sub.get(1).copied().unwrap_or("").trim().to_string();
                 if session_id.is_empty() {
-                    self.messages.push(Message::error("Usage: /session load <session_id>"));
+                    self.push_message(Message::error("Usage: /session load <session_id>"));
                     return;
                 }
                 match &self.python_bridge {
-                    None => self.messages.push(Message::system("AI bridge not ready.")),
+                    None => self.push_message(Message::system("AI bridge not ready.")),
                     Some(bridge) => {
                         let bridge = bridge.clone();
                         let tx = self.bg_tx.clone();
-                        self.messages.push(Message::system(format!("Loading session {}...", session_id)));
+                        self.push_message(Message::system(format!("Loading session {}...", session_id)));
                         tokio::spawn(async move {
                             if let Err(e) = bridge.load_session(session_id).await {
                                 let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
@@ -679,7 +691,7 @@ impl App {
             }
             "summary" => {
                 match &self.python_bridge {
-                    None => self.messages.push(Message::system("AI bridge not ready.")),
+                    None => self.push_message(Message::system("AI bridge not ready.")),
                     Some(bridge) => {
                         let bridge = bridge.clone();
                         let tx = self.bg_tx.clone();
@@ -692,7 +704,7 @@ impl App {
                 }
             }
             _ => {
-                self.messages.push(Message::error(
+                self.push_message(Message::error(
                     format!("Unknown session subcommand: '{}'. Use: new, load <id>, summary.", sub[0])
                 ));
             }
@@ -702,10 +714,10 @@ impl App {
     fn send_action_query(&mut self, text: String) {
         match &self.python_bridge {
             None => {
-                self.messages.push(Message::system("AI bridge not ready."));
+                self.push_message(Message::system("AI bridge not ready."));
             }
             Some(_) if !self.llm_available => {
-                self.messages.push(Message::system(
+                self.push_message(Message::system(
                     "No LLM configured — cannot run action query. Add an API key to .env."
                 ));
             }
@@ -714,7 +726,7 @@ impl App {
                 let root = self.project_root.clone();
                 let tx = self.bg_tx.clone();
                 self.mode = AppMode::Analyzing;
-                self.messages.push(Message::system("Thinking... (action mode)"));
+                self.push_message(Message::system("Thinking... (action mode)"));
                 tokio::spawn(async move {
                     if let Err(e) = bridge.query_with_actions(text, root).await {
                         let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
@@ -727,10 +739,10 @@ impl App {
     fn generate_mission(&mut self, focus: String) {
         match &self.python_bridge {
             None => {
-                self.messages.push(Message::system("AI bridge not ready."));
+                self.push_message(Message::system("AI bridge not ready."));
             }
             Some(_) if !self.llm_available => {
-                self.messages.push(Message::system(
+                self.push_message(Message::system(
                     "No LLM configured — cannot generate mission. Add an API key to .env."
                 ));
             }
@@ -743,7 +755,7 @@ impl App {
                 } else {
                     format!("Generating mission focused on: {}...", focus)
                 };
-                self.messages.push(Message::system(label));
+                self.push_message(Message::system(label));
                 tokio::spawn(async move {
                     if let Err(e) = bridge.generate_mission(focus).await {
                         let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
@@ -780,14 +792,14 @@ impl App {
                 self.stats.total_files = files;
                 self.status_text = format!("{} files indexed • {} symbols", files, symbols);
                 if files > 0 {
-                    self.messages.push(Message::system(format!(
+                    self.push_message(Message::system(format!(
                         "Index complete: {} files, {} symbols.", files, symbols
                     )));
                 }
             }
             BackgroundEvent::IndexError(e) => {
                 self.index_progress = None;
-                self.messages.push(Message::error(format!("Index error: {}", e)));
+                self.push_message(Message::error(format!("Index error: {}", e)));
             }
             BackgroundEvent::AssistantChunk(chunk) => {
                 if let Some(ref mut resp) = self.streaming_response {
@@ -799,7 +811,7 @@ impl App {
             BackgroundEvent::AssistantDone => {
                 self.mode = AppMode::Ready;
                 if let Some(text) = self.streaming_response.take() {
-                    self.messages.push(Message::assistant(text));
+                    self.push_message(Message::assistant(text));
                 }
             }
             BackgroundEvent::AssistantError(e) => {
@@ -807,10 +819,10 @@ impl App {
                 // Flush any partial streaming response before showing error
                 if let Some(partial) = self.streaming_response.take() {
                     if !partial.is_empty() {
-                        self.messages.push(Message::assistant(partial));
+                        self.push_message(Message::assistant(partial));
                     }
                 }
-                self.messages.push(Message::error(format!("AI error: {}", e)));
+                self.push_message(Message::error(format!("AI error: {}", e)));
             }
             BackgroundEvent::BridgeReady { has_llm } => {
                 self.llm_available = has_llm;
@@ -839,9 +851,9 @@ impl App {
                         text.push('\n');
                         text.push_str(&output);
                     }
-                    self.messages.push(Message::system(text));
+                    self.push_message(Message::system(text));
                 } else {
-                    self.messages.push(Message::error(format!("Action failed: {}", message)));
+                    self.push_message(Message::error(format!("Action failed: {}", message)));
                 }
                 // Show next pending action (if any)
                 self.show_next_pending_action();
@@ -862,7 +874,7 @@ impl App {
                 // sends its "ready" line — handled in handle_background_event.
             }
             Err(e) => {
-                self.messages.push(Message::system(format!(
+                self.push_message(Message::system(format!(
                     "Python bridge unavailable: {}. Natural language queries disabled.",
                     e
                 )));

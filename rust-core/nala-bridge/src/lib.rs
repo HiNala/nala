@@ -1,4 +1,7 @@
 //! PyO3 bridge — the Rust-to-Python interface.
+// PyO3's wrap_pyfunction! macro internally generates .into() calls on the
+// error type; suppress the useless_conversion lint for the entire crate.
+#![allow(clippy::useless_conversion)]
 //!
 //! Exposes Nala's Rust core (indexing, scanning, metrics) as a native
 //! Python extension module called `nala_core`. The Python orchestrator
@@ -12,14 +15,6 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::path::PathBuf;
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/// Convert an anyhow error to a Python RuntimeError.
-fn to_py_err(e: anyhow::Error) -> PyErr {
-    PyRuntimeError::new_err(e.to_string())
-}
 
 // ── Module functions ───────────────────────────────────────────────────────
 
@@ -37,10 +32,13 @@ fn version() -> &'static str {
 /// result = json.loads(nala_core.scan_project("/path/to/project"))
 /// print(result["total_files"])
 /// ```
+#[allow(clippy::useless_conversion)] // triggered by PyO3 macro expansion
 #[pyfunction]
 fn scan_project(path: &str) -> PyResult<String> {
-    let root = PathBuf::from(path);
-    let result = nala_indexer::scan_project(&root).map_err(to_py_err)?;
+    let result = match nala_indexer::scan_project(std::path::Path::new(path)) {
+        Ok(r) => r,
+        Err(e) => return Err(PyRuntimeError::new_err(e.to_string())),
+    };
 
     let json = serde_json::json!({
         "total_files": result.total_files,
@@ -61,10 +59,13 @@ fn scan_project(path: &str) -> PyResult<String> {
 /// result = json.loads(nala_core.index_project("/path/to/project"))
 /// print(result["total_symbols"])
 /// ```
+#[allow(clippy::useless_conversion)] // triggered by PyO3 macro expansion
 #[pyfunction]
 fn index_project(path: &str) -> PyResult<String> {
-    let root = PathBuf::from(path);
-    let result = nala_indexer::index_project(&root).map_err(to_py_err)?;
+    let result = match nala_indexer::index_project(std::path::Path::new(path)) {
+        Ok(r) => r,
+        Err(e) => return Err(PyRuntimeError::new_err(e.to_string())),
+    };
 
     let json = serde_json::json!({
         "indexed_files": result.indexed_files,

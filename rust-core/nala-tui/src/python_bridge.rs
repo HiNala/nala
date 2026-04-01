@@ -177,12 +177,12 @@ impl PythonBridge {
 /// * `project_root` — passed to the subprocess as `--root`
 /// * `bg_tx`        — the `BackgroundEvent` sender already owned by `App`
 pub async fn spawn(
-    project_root: &PathBuf,
+    project_root: &std::path::Path,
     bg_tx: mpsc::Sender<BackgroundEvent>,
 ) -> Result<PythonBridge> {
     let (query_tx, query_rx) = mpsc::channel::<BridgeRequest>(32);
 
-    let root = project_root.clone();
+    let root = project_root.to_path_buf();
     let root_str = root.to_string_lossy().to_string();
 
     // Spawn the subprocess

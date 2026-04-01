@@ -128,7 +128,7 @@ fn render_main_content(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(block, area);
 
     // Build the display lines from the message log
-    let inner_width = inner.width as usize;
+    let _inner_width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
 
     for msg in &app.messages {

@@ -71,11 +71,11 @@ async fn main() -> Result<()> {
 
 // ── Command handlers ───────────────────────────────────────────────────────
 
-async fn run_tui(path: &PathBuf) -> Result<()> {
+async fn run_tui(path: &std::path::Path) -> Result<()> {
     nala_tui::run(path).await
 }
 
-async fn run_scan(path: &PathBuf) -> Result<()> {
+async fn run_scan(path: &std::path::Path) -> Result<()> {
     println!("Scanning {}...", path.display());
     let result = nala_indexer::scan_project(path)?;
     println!(
@@ -89,7 +89,7 @@ async fn run_scan(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn run_index(path: &PathBuf) -> Result<()> {
+async fn run_index(path: &std::path::Path) -> Result<()> {
     println!("Indexing {}...", path.display());
     let result = nala_indexer::index_project(path)?;
     println!(
@@ -105,8 +105,8 @@ async fn run_index(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn run_dashboard(path: &PathBuf, port: u16) -> Result<()> {
-    let root_str = path.canonicalize().unwrap_or_else(|_| path.clone());
+async fn run_dashboard(path: &std::path::Path, port: u16) -> Result<()> {
+    let root_str = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     println!(
         "Starting Nala dashboard on http://127.0.0.1:{} (project: {})",
         port,

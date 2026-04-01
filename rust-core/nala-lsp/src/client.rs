@@ -35,6 +35,7 @@ pub struct HoverInfo {
 
 /// Manages one or more LSP server connections for a project.
 pub struct LspManager {
+    #[allow(dead_code)]
     project_root: PathBuf,
     server: LspServer,
     /// True once the LSP server has been initialised.
