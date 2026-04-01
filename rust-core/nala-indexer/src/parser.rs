@@ -49,7 +49,7 @@ pub fn detect_language(extension: &str) -> Option<&'static str> {
 ///
 /// Files with unrecognised extensions are silently skipped.
 /// Parse errors are logged as warnings but do not fail the overall indexing.
-pub fn parse_files_parallel(files: &[HashedFile], root: &Path) -> Result<Vec<Symbol>> {
+pub fn parse_files_parallel(files: &[HashedFile], _root: &Path) -> Result<Vec<Symbol>> {
     let symbols: Vec<Vec<Symbol>> = files
         .par_iter()
         .filter_map(|file| {
@@ -107,7 +107,7 @@ fn extract_rust(source: &str, file_path: &str) -> (Vec<Symbol>, usize) {
     };
 
     let mut symbols = Vec::new();
-    let mut cursor = tree.walk();
+    let _cursor = tree.walk();
     let error_count = count_errors(&tree.root_node());
 
     walk_node_rust(tree.root_node(), source, file_path, &mut symbols);

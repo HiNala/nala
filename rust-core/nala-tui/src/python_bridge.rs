@@ -1,0 +1,291 @@
+//! Python IPC bridge.
+//!
+//! Spawns a `python -m nala_orchestrator.cli` subprocess and communicates
+//! with it over JSON-lines on stdin/stdout. Each natural-language query is
+//! sent as a JSON request; the subprocess streams chunks back and signals
+//! completion with a `done` message.
+//!
+//! The bridge runs as a persistent background task for the lifetime of the
+//! application. Queries are sent through a `QuerySender` channel handle, and
+//! responses arrive on the shared `BackgroundEvent` channel already owned by
+//! `App`.
+//!
+//! ## Subprocess protocol (JSON-lines)
+//!
+//! ```text
+//! → {"id":"1","type":"query","text":"...","project_root":"..."}
+//! ← {"id":"1","type":"chunk","text":"..."}   (0..N)
+//! ← {"id":"1","type":"done"}
+//! ← {"id":"1","type":"error","text":"..."}
+//!
+//! → {"id":"2","type":"ping"}
+//! ← {"id":"2","type":"pong","version":"0.1.0"}
+//!
+//! → {"id":"3","type":"index_context","total_files":10,"total_symbols":50}
+//! ← {"id":"3","type":"ok"}
+//! ```
+
+use crate::app::BackgroundEvent;
+use anyhow::{anyhow, Context, Result};
+use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::mpsc;
+
+// ── Request ID counter ─────────────────────────────────────────────────────
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_id() -> String {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed).to_string()
+}
+
+// ── QueryRequest ───────────────────────────────────────────────────────────
+
+/// A query to send to the Python subprocess.
+pub struct QueryRequest {
+    pub text: String,
+    pub project_root: PathBuf,
+}
+
+// ── PythonBridge ───────────────────────────────────────────────────────────
+
+/// Handle for sending queries to the background Python bridge task.
+///
+/// Clone freely — all clones share the same underlying channel.
+#[derive(Clone)]
+pub struct PythonBridge {
+    query_tx: mpsc::Sender<QueryRequest>,
+}
+
+impl PythonBridge {
+    /// Send a natural-language query. Responses arrive on the `BackgroundEvent`
+    /// channel that was passed to `spawn()`.
+    pub async fn query(&self, text: String, project_root: PathBuf) -> Result<()> {
+        self.query_tx
+            .send(QueryRequest { text, project_root })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+}
+
+// ── spawn ──────────────────────────────────────────────────────────────────
+
+/// Launch the Python IPC subprocess and return a `PythonBridge` handle.
+///
+/// The bridge task runs until the `PythonBridge` (and all its clones) are
+/// dropped, at which point the subprocess stdin is closed and it exits cleanly.
+///
+/// * `project_root` — passed to the subprocess as `--root`
+/// * `bg_tx`        — the `BackgroundEvent` sender already owned by `App`
+pub async fn spawn(
+    project_root: &PathBuf,
+    bg_tx: mpsc::Sender<BackgroundEvent>,
+) -> Result<PythonBridge> {
+    let (query_tx, query_rx) = mpsc::channel::<QueryRequest>(32);
+
+    let root = project_root.clone();
+    let root_str = root.to_string_lossy().to_string();
+
+    // Spawn the subprocess
+    let mut child = Command::new("python")
+        .args(["-m", "nala_orchestrator.cli", "--root", &root_str])
+        .env("PYTHONUNBUFFERED", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null()) // suppress Python tracebacks in TUI
+        .spawn()
+        .context("Failed to spawn Python IPC subprocess. Is nala_orchestrator installed?")?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("Failed to take subprocess stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("Failed to take subprocess stdout"))?;
+
+    // Wait for the "ready" message before accepting queries
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<bool>>();
+
+    // bg_tx_task goes into the spawned task; bg_tx_notify stays here for after ready
+    let bg_tx_task = bg_tx.clone();
+    let bg_tx_notify = bg_tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = bridge_task(child, stdin, stdout, query_rx, bg_tx_task, ready_tx).await {
+            // Bridge crashed — notify the UI
+            let _ = bg_tx
+                .send(BackgroundEvent::AssistantError(format!(
+                    "Python bridge error: {e}"
+                )))
+                .await;
+        }
+    });
+
+    // Block until the subprocess signals ready (or fails)
+    let has_llm = match ready_rx.await {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err(anyhow!("Python bridge task exited before signalling ready")),
+    };
+
+    // Notify the UI that the bridge is up
+    let _ = bg_tx_notify
+        .send(BackgroundEvent::BridgeReady { has_llm })
+        .await;
+
+    Ok(PythonBridge { query_tx })
+}
+
+// ── bridge_task ────────────────────────────────────────────────────────────
+
+/// Core background task: manages the subprocess lifecycle.
+async fn bridge_task(
+    mut child: Child,
+    mut stdin: ChildStdin,
+    stdout: ChildStdout,
+    mut query_rx: mpsc::Receiver<QueryRequest>,
+    bg_tx: mpsc::Sender<BackgroundEvent>,
+    ready_tx: tokio::sync::oneshot::Sender<Result<bool>>,
+) -> Result<()> {
+    let mut reader = BufReader::new(stdout).lines();
+
+    // ── Wait for "ready" ───────────────────────────────────────────────────
+    let has_llm = loop {
+        match reader.next_line().await {
+            Ok(Some(line)) => {
+                if let Ok(msg) = serde_json::from_str::<Value>(&line) {
+                    if msg.get("type").and_then(|t| t.as_str()) == Some("ready") {
+                        let has_llm = msg
+                            .get("has_llm")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        break has_llm;
+                    }
+                }
+            }
+            Ok(None) => {
+                let _ = ready_tx.send(Err(anyhow!("Subprocess exited before sending ready")));
+                return Ok(());
+            }
+            Err(e) => {
+                let _ = ready_tx.send(Err(e.into()));
+                return Ok(());
+            }
+        }
+    };
+    let _ = ready_tx.send(Ok(has_llm));
+
+    // ── Main dispatch loop ─────────────────────────────────────────────────
+    loop {
+        tokio::select! {
+            // Incoming query from the TUI
+            maybe_req = query_rx.recv() => {
+                match maybe_req {
+                    None => break, // All PythonBridge handles dropped
+                    Some(req) => {
+                        let id = next_id();
+                        let msg = json!({
+                            "id": id,
+                            "type": "query",
+                            "text": req.text,
+                            "project_root": req.project_root.to_string_lossy(),
+                        });
+                        if let Err(e) = send_line(&mut stdin, &msg).await {
+                            let _ = bg_tx.send(BackgroundEvent::AssistantError(
+                                format!("Failed to send query: {e}")
+                            )).await;
+                        }
+                    }
+                }
+            }
+
+            // Response from the subprocess
+            line = reader.next_line() => {
+                match line {
+                    Err(e) => {
+                        let _ = bg_tx.send(BackgroundEvent::AssistantError(
+                            format!("IPC read error: {e}")
+                        )).await;
+                        break;
+                    }
+                    Ok(None) => break, // subprocess exited
+                    Ok(Some(raw)) => {
+                        handle_response(&raw, &bg_tx).await;
+                    }
+                }
+            }
+        }
+    }
+
+    // Close stdin → subprocess exits cleanly
+    drop(stdin);
+    let _ = child.wait().await;
+    Ok(())
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Write a JSON value as a single line to the subprocess stdin.
+async fn send_line(stdin: &mut ChildStdin, msg: &Value) -> Result<()> {
+    let mut line = serde_json::to_string(msg)?;
+    line.push('\n');
+    stdin.write_all(line.as_bytes()).await?;
+    stdin.flush().await?;
+    Ok(())
+}
+
+/// Parse one JSON-lines response and route it to the BackgroundEvent channel.
+async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
+    let msg = match serde_json::from_str::<Value>(raw) {
+        Ok(v) => v,
+        Err(_) => return, // ignore malformed lines
+    };
+
+    let msg_type = msg.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match msg_type {
+        "chunk" => {
+            let text = msg
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !text.is_empty() {
+                let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+            }
+        }
+        "done" => {
+            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        "error" => {
+            let text = msg
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("Unknown error")
+                .to_string();
+            let _ = bg_tx.send(BackgroundEvent::AssistantError(text)).await;
+        }
+        // "pong", "ok", "ready" — informational, no UI event needed
+        _ => {}
+    }
+}
+
+/// Send an index context update to the Python subprocess (fire-and-forget).
+pub async fn send_index_context(
+    stdin: &mut ChildStdin,
+    total_files: usize,
+    total_symbols: usize,
+) -> Result<()> {
+    let id = next_id();
+    let msg = json!({
+        "id": id,
+        "type": "index_context",
+        "total_files": total_files,
+        "total_symbols": total_symbols,
+    });
+    send_line(stdin, &msg).await
+}

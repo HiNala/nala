@@ -13,6 +13,7 @@
 //! - `ui/session_panel.rs` — Collapsible session history panel
 
 pub mod app;
+pub mod python_bridge;
 pub mod ui;
 
 use anyhow::Result;

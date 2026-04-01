@@ -10,7 +10,7 @@ use crate::hasher::HashedFile;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // ── Cache entry ────────────────────────────────────────────────────────────
 

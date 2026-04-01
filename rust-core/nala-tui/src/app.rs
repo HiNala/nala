@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
+use crate::python_bridge::PythonBridge;
 use crate::ui;
 
 // ── App mode ───────────────────────────────────────────────────────────────
@@ -93,6 +94,9 @@ pub enum BackgroundEvent {
     IndexError(String),
     AssistantChunk(String),
     AssistantDone,
+    AssistantError(String),
+    /// Python bridge is ready; carries whether an LLM key is configured.
+    BridgeReady { has_llm: bool },
 }
 
 // ── App ────────────────────────────────────────────────────────────────────
@@ -128,6 +132,10 @@ pub struct App {
     pub bg_tx: mpsc::Sender<BackgroundEvent>,
     /// Current AI response being streamed (appended chunk-by-chunk).
     pub streaming_response: Option<String>,
+    /// Handle to the Python IPC bridge (None until the subprocess is ready).
+    pub python_bridge: Option<PythonBridge>,
+    /// Whether the LLM is available (set once bridge signals ready).
+    pub llm_available: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -159,6 +167,8 @@ impl App {
             bg_rx: rx,
             bg_tx: tx,
             streaming_response: None,
+            python_bridge: None,
+            llm_available: false,
         })
     }
 
@@ -167,6 +177,11 @@ impl App {
     /// Run the application until the user quits.
     pub async fn run(&mut self) -> Result<()> {
         let mut terminal = ratatui::init();
+
+        // Spawn the Python bridge in the background. Failure here is non-fatal:
+        // the UI will show a message when the user tries to query.
+        self.start_python_bridge().await;
+
         let result = self.event_loop(&mut terminal).await;
         ratatui::restore();
         result
@@ -364,10 +379,33 @@ impl App {
         if input.starts_with('/') {
             self.handle_slash_command(&input);
         } else {
-            // Natural language query — will be routed to the LLM in Mission 12
-            self.messages.push(Message::system(
-                "AI assistant not yet configured. Add your API key to .env and restart.",
-            ));
+            self.send_llm_query(input);
+        }
+    }
+
+    fn send_llm_query(&mut self, text: String) {
+        match &self.python_bridge {
+            None => {
+                self.messages.push(Message::system(
+                    "AI bridge is starting up — please wait a moment and try again.",
+                ));
+            }
+            Some(_) if !self.llm_available => {
+                self.messages.push(Message::system(
+                    "No LLM configured. Add ANTHROPIC_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY) to .env and restart.",
+                ));
+            }
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let root = self.project_root.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.query(text, root).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
         }
     }
 
@@ -443,9 +481,49 @@ impl App {
                 }
             }
             BackgroundEvent::AssistantDone => {
+                self.mode = AppMode::Ready;
                 if let Some(text) = self.streaming_response.take() {
                     self.messages.push(Message::assistant(text));
                 }
+            }
+            BackgroundEvent::AssistantError(e) => {
+                self.mode = AppMode::Ready;
+                // Flush any partial streaming response before showing error
+                if let Some(partial) = self.streaming_response.take() {
+                    if !partial.is_empty() {
+                        self.messages.push(Message::assistant(partial));
+                    }
+                }
+                self.messages.push(Message::error(format!("AI error: {}", e)));
+            }
+            BackgroundEvent::BridgeReady { has_llm } => {
+                self.llm_available = has_llm;
+                if has_llm {
+                    self.status_text = "AI ready".to_string();
+                } else {
+                    self.status_text = "AI offline — add API key to .env".to_string();
+                }
+            }
+        }
+    }
+
+    // ── Python bridge ──────────────────────────────────────────────────────
+
+    async fn start_python_bridge(&mut self) {
+        let root = self.project_root.clone();
+        let bg_tx = self.bg_tx.clone();
+
+        match crate::python_bridge::spawn(&root, bg_tx.clone()).await {
+            Ok(bridge) => {
+                self.python_bridge = Some(bridge);
+                // BridgeReady will arrive via BackgroundEvent once the subprocess
+                // sends its "ready" line — handled in handle_background_event.
+            }
+            Err(e) => {
+                self.messages.push(Message::system(format!(
+                    "Python bridge unavailable: {}. Natural language queries disabled.",
+                    e
+                )));
             }
         }
     }
