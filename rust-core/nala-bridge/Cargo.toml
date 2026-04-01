@@ -1,0 +1,15 @@
+[package]
+name = "nala-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name       = "nala_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+nala-indexer.workspace = true
+pyo3.workspace         = true
+anyhow.workspace       = true
+serde_json.workspace   = true

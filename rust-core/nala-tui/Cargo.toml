@@ -1,0 +1,16 @@
+[package]
+name = "nala-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nala-indexer.workspace = true
+ratatui.workspace      = true
+crossterm              = { version = "0.28", features = ["event-stream"] }
+tokio.workspace        = true
+tokio-stream           = "0.1"
+anyhow.workspace       = true
+tracing.workspace      = true
+serde.workspace        = true
+serde_json.workspace   = true

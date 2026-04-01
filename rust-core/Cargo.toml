@@ -1,0 +1,62 @@
+[workspace]
+members = [
+    "nala-cli",
+    "nala-tui",
+    "nala-indexer",
+    "nala-lsp",
+    "nala-bridge",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Nala Contributors"]
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+nala-tui      = { path = "nala-tui" }
+nala-indexer  = { path = "nala-indexer" }
+nala-lsp      = { path = "nala-lsp" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# TUI
+ratatui   = "0.29"
+crossterm = "0.28"
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# File system traversal
+walkdir = "2"
+
+# Content hashing
+sha2 = "0.10"
+
+# Parallel processing
+rayon = "1"
+
+# SQLite (bundled so no system lib needed)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Error handling
+anyhow    = "1"
+thiserror = "2"
+
+# Logging / tracing
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# LSP types
+lsp-types = "0.97"
+
+# Python bridge
+pyo3 = { version = "0.22", features = ["extension-module"] }

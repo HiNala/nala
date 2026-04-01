@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nala — Code Graph</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0a0a12;
+      color: #e0e0f0;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 12px 20px;
+      background: #14141e;
+      border-bottom: 1px solid #2a2a40;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 { font-size: 1.1rem; color: #00d4d4; font-weight: 700; }
+    header span { color: #555; font-size: 0.85rem; }
+    #controls {
+      padding: 8px 20px;
+      background: #10101a;
+      border-bottom: 1px solid #1e1e2e;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    button {
+      background: #1a1a2e;
+      color: #a0a0c0;
+      border: 1px solid #2a2a50;
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    button:hover { background: #22223a; color: #00d4d4; }
+    #stats { font-size: 0.75rem; color: #555; }
+    #graph { flex: 1; }
+    svg { width: 100%; height: 100%; }
+    .node circle { stroke-width: 1.5px; cursor: pointer; }
+    .node.File circle { fill: #1a5276; stroke: #2e86c1; }
+    .node.Function circle { fill: #1e8449; stroke: #27ae60; }
+    .node.Class circle { fill: #7d6608; stroke: #f1c40f; }
+    .node text { font-size: 9px; fill: #aaa; pointer-events: none; }
+    .link { stroke: #2a2a3a; stroke-opacity: 0.6; }
+    .link.CALLS { stroke: #27ae60; }
+    .link.IMPORTS { stroke: #2980b9; }
+    .link.CONTAINS { stroke: #444; stroke-dasharray: 4; }
+    #tooltip {
+      position: fixed;
+      background: #1a1a2e;
+      border: 1px solid #2a2a50;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      pointer-events: none;
+      display: none;
+      color: #c0c0e0;
+      max-width: 300px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>nala</h1>
+    <span>code knowledge graph</span>
+  </header>
+  <div id="controls">
+    <button onclick="loadGraph()">Refresh</button>
+    <button onclick="filterType('File')">Files</button>
+    <button onclick="filterType('Function')">Functions</button>
+    <button onclick="filterType('all')">All</button>
+    <span id="stats">Loading...</span>
+  </div>
+  <div id="graph"></div>
+  <div id="tooltip"></div>
+  <script src="/static/graph.js"></script>
+</body>
+</html>

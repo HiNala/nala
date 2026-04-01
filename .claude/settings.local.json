@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /c/Users/NalaBook/Desktop/Nala/docs/missions)",
+      "Bash(mkdir -p /c/Users/NalaBook/Desktop/Nala/rust-core/nala-cli/src)",
+      "Bash(mkdir -p /c/Users/NalaBook/Desktop/Nala/rust-core/nala-tui/src/ui)",
+      "Bash(mkdir -p /c/Users/NalaBook/Desktop/Nala/rust-core/nala-indexer/src)",
+      "Bash(mkdir -p /c/Users/NalaBook/Desktop/Nala/rust-core/nala-lsp/src)",
+      "Bash(cargo check:*)",
+      "Read(//c/Users/NalaBook/.cargo/bin/**)",
+      "Read(//c/Users/NalaBook/Desktop/Nala/rust-core/$USERPROFILE/.cargo/bin/**)",
+      "Bash(export PATH=\"$PATH:/c/Users/NalaBook/.cargo/bin\")",
+      "Bash(/c/Users/NalaBook/.cargo/bin/cargo check:*)",
+      "Bash(git remote:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

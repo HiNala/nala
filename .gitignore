@@ -1,0 +1,48 @@
+# Rust build artifacts
+/rust-core/target/
+**/*.rs.bk
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+.eggs/
+build/
+*.so
+*.pyd
+
+# Maturin / PyO3 native extensions
+/python-orchestrator/nala_core*.so
+/python-orchestrator/nala_core*.pyd
+/rust-core/nala-bridge/target/
+
+# Nala session data
+.nala/
+
+# Neo4j data
+neo4j_data/
+
+# Environment / secrets
+.env
+*.env.local
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml

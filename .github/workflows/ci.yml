@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Rust ──────────────────────────────────────────────────────────────────
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core -> target
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path rust-core/Cargo.toml --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --manifest-path rust-core/Cargo.toml --workspace -- -D warnings
+
+      - name: Build
+        run: cargo build --manifest-path rust-core/Cargo.toml --workspace
+
+      - name: Test
+        run: cargo test --manifest-path rust-core/Cargo.toml --workspace
+
+  # ── Python ────────────────────────────────────────────────────────────────
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint with ruff
+        run: ruff check python-orchestrator/nala_orchestrator/
+
+      - name: Check formatting
+        run: ruff format --check python-orchestrator/nala_orchestrator/
+
+  # ── Security audit ────────────────────────────────────────────────────────
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --quiet
+      - name: Audit dependencies
+        run: cargo audit --manifest-path rust-core/Cargo.toml
+        continue-on-error: true  # Don't fail CI on advisories, just warn
