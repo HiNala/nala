@@ -21,6 +21,8 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from ..compression.pipeline import CompressionPipeline
+
 log = logging.getLogger(__name__)
 
 # Patterns that indicate a turn contains verbose tool output.
@@ -85,21 +87,17 @@ class Compactor:
             old = history[: len(history) - self._keep_recent]
             recent = history[len(history) - self._keep_recent :]
 
-        tier1_applied = False
+        # ── Tier 1: compression pipeline (dedup + tool outputs + code + prose)
+        pipeline = CompressionPipeline()
+        pruned_old_with_recent, pipe_report = pipeline.compress_history(
+            history, keep_recent=self._keep_recent
+        )
+        # Extract only the old portion (pipeline keeps recent at end)
+        pruned_old = pruned_old_with_recent[: len(pruned_old_with_recent) - len(recent)]
+        tier1_applied = bool(pipe_report.stages_applied)
+
+        # ── Tier 2: summarise old turns into one system block ─────────────
         tier2_applied = False
-
-        # ── Tier 1: prune verbose tool outputs in old turns ───────────────
-        pruned_old = []
-        for msg in old:
-            content = msg.get("content", "")
-            if self._is_verbose_tool_output(content):
-                pruned = self._prune_tool_output(content)
-                pruned_old.append({**msg, "content": pruned})
-                tier1_applied = True
-            else:
-                pruned_old.append(msg)
-
-        # ── Tier 2: summarise old turns ───────────────────────────────────
         if pruned_old:
             summary_text = self._summarise_turns(pruned_old)
             compacted_history = [
@@ -113,7 +111,7 @@ class Compactor:
 
         strategies = []
         if tier1_applied:
-            strategies.append("tier1")
+            strategies.append("tier1[" + "+".join(pipe_report.stages_applied) + "]")
         if tier2_applied:
             strategies.append("tier2")
         strategy_used = "+".join(strategies) if strategies else "none"
@@ -122,7 +120,8 @@ class Compactor:
         summary = (
             f"Compacted {len(old)} older turns → 1 summary block. "
             f"Kept {len(recent)} recent turns verbatim. "
-            f"Estimated savings: ~{saved:,} tokens."
+            f"Estimated savings: ~{saved:,} tokens. "
+            f"Pipeline: {pipe_report.reduction_pct:.0f}% content reduction."
         )
 
         return compacted_history, CompactionResult(
