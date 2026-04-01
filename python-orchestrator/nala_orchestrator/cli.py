@@ -73,10 +73,15 @@ from .agents.action_extractor import extract_actions
 from .agents.action_executor import ActionExecutor
 from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
+from .chunking.splitter import ChunkSplitter, Symbol
+from .chunking.embedder import Embedder
 
 # Per-process store of proposed actions keyed by action_id.
 # Cleared when a new session starts.
 _pending_actions: dict[str, object] = {}
+
+# Project-level embedder (built lazily on first index_context with symbols).
+_embedder: Optional[Embedder] = None
 
 # Flush immediately — Rust reads line-by-line
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
@@ -114,10 +119,31 @@ async def handle_request(
 
     # ── Index context update ───────────────────────────────────────────────
     elif req_type == "index_context":
-        agent.update_index_context(
-            total_files=req.get("total_files", 0),
-            total_symbols=req.get("total_symbols", 0),
-        )
+        total_files = req.get("total_files", 0)
+        total_symbols = req.get("total_symbols", 0)
+        agent.update_index_context(total_files=total_files, total_symbols=total_symbols)
+
+        # Rebuild chunk index if stale.
+        global _embedder
+        symbols_raw: list[dict] = req.get("symbols", [])
+        if symbols_raw:
+            syms = [
+                Symbol(
+                    name=s.get("name", ""),
+                    kind=s.get("kind", ""),
+                    start_line=s.get("start_line", 1),
+                    end_line=s.get("end_line", 1),
+                    file_path=s.get("file_path", ""),
+                )
+                for s in symbols_raw
+            ]
+            if _embedder is None or _embedder.needs_rebuild(total_files):
+                _embedder = Embedder(str(root))
+                splitter = ChunkSplitter()
+                chunks = splitter.split_all(str(root), syms)
+                _embedder.build(chunks)
+                agent.set_embedder(_embedder)
+
         write_response({"id": req_id, "type": "ok"})
 
     # ── Natural language query (streaming) ────────────────────────────────
@@ -411,6 +437,11 @@ async def run_ipc_loop(project_root: Optional[str] = None) -> None:
     sm = SessionManager(root)
     sm.new_session()
     agent.set_session(sm)
+
+    # Initialise the embedder (BM25 works offline; vector index is lazy).
+    global _embedder
+    _embedder = Embedder(str(root))
+    agent.set_embedder(_embedder)
 
     # Signal ready
     write_response({

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Optional
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
     from nala_orchestrator.sessions.manager import SessionManager
+    from nala_orchestrator.chunking.embedder import Embedder
 
 from ..llm.provider import LLMMessage, create_provider
 
@@ -44,6 +45,9 @@ Your role is to:
 
 When referencing code, always include file paths and line numbers.
 Keep responses focused and actionable. The developer is experienced — skip basics.
+
+## Retrieved context
+{retrieved_context}
 """
 
 # Extra instructions appended when the user explicitly requests actions
@@ -117,6 +121,22 @@ class AgentOrchestrator:
         )
         self._provider = None
         self._session: Optional["SessionManager"] = None
+        self._embedder: Optional["Embedder"] = None
+
+    # ── Retrieval ──────────────────────────────────────────────────────────
+
+    def set_embedder(self, embedder: "Embedder") -> None:
+        """Attach an Embedder so queries are augmented with retrieved context."""
+        self._embedder = embedder
+
+    def _retrieve_context(self, query: str) -> str:
+        """Retrieve the most relevant code chunks for a query."""
+        if self._embedder is None or not self._embedder.is_ready():
+            return "(index not yet available)"
+        from ..chunking.assembler import ContextAssembler
+        chunks = self._embedder.retrieve(query, top_k=10)
+        assembled = ContextAssembler().assemble(chunks, token_budget=4000)
+        return assembled.text
 
     # ── Session management ─────────────────────────────────────────────────
 
@@ -156,14 +176,16 @@ class AgentOrchestrator:
             self._provider = create_provider(self.config)
         return self._provider
 
-    def build_system_prompt(self) -> str:
-        """Build the system prompt with current project context."""
+    def build_system_prompt(self, query: str = "") -> str:
+        """Build the system prompt with current project context and retrieved chunks."""
+        retrieved = self._retrieve_context(query) if query else "(no query provided)"
         return SYSTEM_PROMPT_TEMPLATE.format(
             project_name=Path(self.context.project_root).name,
             project_root=self.context.project_root,
             total_files=self.context.total_files,
             total_symbols=self.context.total_symbols,
             primary_language=self.context.primary_language,
+            retrieved_context=retrieved,
         )
 
     def update_index_context(self, total_files: int, total_symbols: int) -> None:
@@ -193,7 +215,7 @@ class AgentOrchestrator:
             provider = self._get_provider()
             response = await provider.chat(
                 messages=self.context.messages,
-                system_prompt=self.build_system_prompt(),
+                system_prompt=self.build_system_prompt(user_message),
             )
             self.context.add_assistant(response.content)
             session.append_turn("assistant", response.content)
@@ -220,7 +242,7 @@ class AgentOrchestrator:
         self.context.trim_to_limit()
         session.append_turn("user", user_message)
 
-        action_system = self.build_system_prompt() + ACTION_PROMPT_EXTENSION
+        action_system = self.build_system_prompt(user_message) + ACTION_PROMPT_EXTENSION
         full_response: list[str] = []
         try:
             provider = self._get_provider()
@@ -260,7 +282,7 @@ class AgentOrchestrator:
             provider = self._get_provider()
             async for chunk in provider.stream_chat(
                 messages=self.context.messages,
-                system_prompt=self.build_system_prompt(),
+                system_prompt=self.build_system_prompt(user_message),
             ):
                 full_response.append(chunk)
                 yield chunk
