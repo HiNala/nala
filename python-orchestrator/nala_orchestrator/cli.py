@@ -45,6 +45,16 @@ Full protocol (JSON-lines over stdin/stdout):
   Request:  {"id":"C","type":"skip_action","action_id":"abc"}
   Response: {"id":"C","type":"ok"}
 
+  ── Multi-agent team ──────────────────────────────────────────────────────
+  Request:  {"id":"T","type":"team_start","objective":"..."}
+  Response: (chunk/done streaming progress + final summary)
+
+  Request:  {"id":"T","type":"team_status"}
+  Response: (chunk/done with task list + lock status)
+
+  Request:  {"id":"T","type":"team_cancel"}
+  Response: {"id":"T","type":"ok","text":"Team cancelled."}
+
   ── Housekeeping ──────────────────────────────────────────────────────────
   Request:  {"id":"8","type":"index_context","total_files":10,"total_symbols":50}
   Response: {"id":"8","type":"ok"}
@@ -79,6 +89,7 @@ from .memory.session_memory import SessionMemory
 from .memory.knowledge import KnowledgeBase
 from .handoff.writer import HandoffWriter
 from .handoff.reader import HandoffReader
+from .multi_agent.lead import LeadAgent
 
 # Per-process store of proposed actions keyed by action_id.
 # Cleared when a new session starts.
@@ -86,6 +97,9 @@ _pending_actions: dict[str, object] = {}
 
 # Project-level embedder (built lazily on first index_context with symbols).
 _embedder: Optional[Embedder] = None
+
+# Singleton lead agent — created on first team_start, reused for status/cancel.
+_lead_agent: Optional[LeadAgent] = None
 
 # Flush immediately — Rust reads line-by-line
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
@@ -424,6 +438,36 @@ async def handle_request(
         else:
             text = "No active session. Run a query or /analyze to start one."
         write_response({"id": req_id, "type": "session_summary", "text": text})
+
+    # ── Multi-agent: start a team run (streaming progress) ───────────────
+    elif req_type == "team_start":
+        objective = req.get("objective", "").strip()
+        if not objective:
+            write_response({"id": req_id, "type": "error", "text": "Missing objective"})
+            return
+        global _lead_agent
+        _lead_agent = LeadAgent(config, root)
+        try:
+            async for chunk in _lead_agent.stream_run(objective):
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Team run error: {e}"})
+
+    # ── Multi-agent: status of running/last team ──────────────────────────
+    elif req_type == "team_status":
+        if _lead_agent is None:
+            _stream_text(req_id, "No team run active.")
+        else:
+            _stream_text(req_id, _lead_agent.get_status())
+
+    # ── Multi-agent: cancel / reset ───────────────────────────────────────
+    elif req_type == "team_cancel":
+        if _lead_agent is not None:
+            _lead_agent._task_list.clear()
+            _lead_agent._bus.clear()
+        _lead_agent = None
+        write_response({"id": req_id, "type": "ok", "text": "Team cancelled."})
 
     else:
         write_response({"id": req_id, "type": "error", "text": f"Unknown type: {req_type}"})
