@@ -58,5 +58,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # LSP types
 lsp-types = "0.97"
 
+# LSP transport framing
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
+
+# URL parsing (for LSP file URIs)
+url = "2"
+
 # Python bridge
 pyo3 = { version = "0.22", features = ["extension-module"] }

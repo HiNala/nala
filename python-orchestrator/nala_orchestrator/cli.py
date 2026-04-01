@@ -439,6 +439,41 @@ async def handle_request(
             text = "No active session. Run a query or /analyze to start one."
         write_response({"id": req_id, "type": "session_summary", "text": text})
 
+    # ── Graph: stats summary ──────────────────────────────────────────────
+    elif req_type == "graph_stats":
+        from .graph.connection import GraphConnection
+        from .graph.queries import find_most_imported_modules, find_circular_dependencies
+        conn = GraphConnection(config)
+        if not conn.connect():
+            _stream_text(req_id, "Neo4j is not connected. Run `neo4j start` to enable graph features.")
+            return
+        try:
+            files = conn.run("MATCH (f:File) RETURN count(f) AS n")[0].get("n", 0)
+            fns = conn.run("MATCH (f:Function) RETURN count(f) AS n")[0].get("n", 0)
+            classes = conn.run("MATCH (c:Class) RETURN count(c) AS n")[0].get("n", 0)
+            mods = conn.run("MATCH (m:Module) RETURN count(m) AS n")[0].get("n", 0)
+            rels = conn.run("MATCH ()-[r]->() RETURN count(r) AS n")[0].get("n", 0)
+            cypher, params = find_most_imported_modules()
+            top = conn.run(cypher, **params)[:5]
+            top_lines = "\n".join(
+                f"  {i+1}. {r.get('module','?')} — imported {r.get('import_count',0)}x"
+                for i, r in enumerate(top)
+            ) or "  (no data)"
+            text = (
+                f"Graph statistics:\n"
+                f"  Files:     {files}\n"
+                f"  Functions: {fns}\n"
+                f"  Classes:   {classes}\n"
+                f"  Modules:   {mods}\n"
+                f"  Relations: {rels}\n\n"
+                f"Top 5 most imported modules:\n{top_lines}"
+            )
+            conn.close()
+            _stream_text(req_id, text)
+        except Exception as e:
+            conn.close()
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
     # ── Multi-agent: start a team run (streaming progress) ───────────────
     elif req_type == "team_start":
         objective = req.get("objective", "").strip()

@@ -24,7 +24,29 @@
       "Read(//c/mnt/c/Users/**)",
       "Read(//c/Users//**)",
       "Bash(~/.cargo/bin/cargo --version)",
-      "Bash(~/.cargo/bin/cargo check:*)"
+      "Bash(~/.cargo/bin/cargo check:*)",
+      "Bash(~/.cargo/bin/cargo clippy:*)",
+      "Bash(grep -v \"^--$\")",
+      "Bash(cargo clippy:*)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
+      "Bash(export PATH=$HOME/.cargo/bin:$PATH:/c/Python312:/c/Python311:/c/Python310)",
+      "Bash(/c/Python312/python -c \"print\\('ok'\\)\")",
+      "Bash(/c/Python312/python -m py_compile nala_orchestrator/chunking/__init__.py nala_orchestrator/chunking/splitter.py nala_orchestrator/chunking/embedder.py nala_orchestrator/chunking/assembler.py nala_orchestrator/agents/orchestrator.py nala_orchestrator/cli.py)",
+      "Bash(wc -l /c/Users/NalaBook/Desktop/Nala/rust-core/nala-indexer/src/*.rs)",
+      "Bash(/c/Python312/python -m py_compile nala_orchestrator/context/__init__.py nala_orchestrator/context/counter.py nala_orchestrator/context/config.py nala_orchestrator/context/detector.py nala_orchestrator/context/compactor.py nala_orchestrator/context/background_summary.py nala_orchestrator/agents/orchestrator.py nala_orchestrator/cli.py)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:claw-code.codes)",
+      "WebFetch(domain:wavespeed.ai)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(grep -rn \"TODO\\\\|placeholder\\\\|pass$\\\\|raise NotImplementedError\" \"/c/Users/NalaBook/Desktop/Nala/python-orchestrator/nala_orchestrator/\" --include=\"*.py\")",
+      "Bash(wc -l \"/c/Users/NalaBook/Desktop/Nala/python-orchestrator/nala_orchestrator/perspectives/\"*.py)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(python -c ':*)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"import nala_orchestrator; print\\('Python package OK'\\)\")",
+      "Bash(python -c \"from nala_orchestrator.config import Config; c = Config.load\\(\\); print\\('Config OK, provider:', c.llm_provider\\)\")"
     ]
   }
 }

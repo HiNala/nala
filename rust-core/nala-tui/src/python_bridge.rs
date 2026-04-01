@@ -70,6 +70,20 @@ pub enum BridgeRequest {
     ContextUsage,
     /// Trigger manual context compaction with optional focus hint.
     CompactContext { focus: String },
+    /// Show Neo4j graph statistics.
+    GraphStats,
+    /// Start a multi-agent team run for the given objective.
+    TeamStart { objective: String },
+    /// Get status of the running / last team run.
+    TeamStatus,
+    /// Cancel the current team run.
+    TeamCancel,
+    /// Save a handoff document manually.
+    HandoffSave,
+    /// Show the most recent handoff document.
+    HandoffShow,
+    /// Show handoff chain history.
+    HandoffHistory,
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -182,6 +196,62 @@ impl PythonBridge {
     pub async fn compact_context(&self, focus: String) -> Result<()> {
         self.request_tx
             .send(BridgeRequest::CompactContext { focus })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Show Neo4j graph statistics.
+    pub async fn graph_stats(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::GraphStats)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Start a multi-agent team run.
+    pub async fn team_start(&self, objective: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::TeamStart { objective })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Get team run status.
+    pub async fn team_status(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::TeamStatus)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Cancel team run.
+    pub async fn team_cancel(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::TeamCancel)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Save a handoff document.
+    pub async fn handoff_save(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::HandoffSave)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Show latest handoff.
+    pub async fn handoff_show(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::HandoffShow)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Show handoff history chain.
+    pub async fn handoff_history(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::HandoffHistory)
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -364,6 +434,35 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "compact_context",
                                 "focus": focus,
+                            }),
+                            BridgeRequest::GraphStats => json!({
+                                "id": id,
+                                "type": "graph_stats",
+                            }),
+                            BridgeRequest::TeamStart { objective } => json!({
+                                "id": id,
+                                "type": "team_start",
+                                "objective": objective,
+                            }),
+                            BridgeRequest::TeamStatus => json!({
+                                "id": id,
+                                "type": "team_status",
+                            }),
+                            BridgeRequest::TeamCancel => json!({
+                                "id": id,
+                                "type": "team_cancel",
+                            }),
+                            BridgeRequest::HandoffSave => json!({
+                                "id": id,
+                                "type": "handoff_save",
+                            }),
+                            BridgeRequest::HandoffShow => json!({
+                                "id": id,
+                                "type": "handoff_show",
+                            }),
+                            BridgeRequest::HandoffHistory => json!({
+                                "id": id,
+                                "type": "handoff_history",
                             }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
 use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
 
 // ── Message ID counter ────────────────────────────────────────────────────────

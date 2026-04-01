@@ -592,7 +592,7 @@ impl App {
         match parts[0] {
             "/help" => {
                 self.push_message(Message::assistant(
-                    "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /act <instruction>  — ask AI to make changes (with diff preview + confirm)\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /context            — show context window usage breakdown\n  /compact            — compact context window to free tokens\n  /compact <focus>    — compact while preserving focus topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
+                    "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /act <instruction>  — ask AI to make changes (with diff preview + confirm)\n  /graph              — show Neo4j code graph statistics\n  /team <objective>   — start a multi-agent team run\n  /team status        — show current team run status\n  /team cancel        — cancel the current team run\n  /handoff            — show latest session handoff document\n  /handoff save       — save a handoff document now\n  /handoff history    — show full handoff chain\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /context            — show context window usage breakdown\n  /compact            — compact context window to free tokens\n  /compact <focus>    — compact while preserving focus topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
                 ));
             }
             "/quit" | "/exit" => {
@@ -632,6 +632,28 @@ impl App {
             "/compact" => {
                 let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
                 self.compact_context(focus);
+            }
+            "/graph" => {
+                self.graph_stats();
+            }
+            "/team" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                match args {
+                    "status" => self.team_status(),
+                    "cancel" => self.team_cancel(),
+                    "" => self.push_message(Message::error(
+                        "Usage: /team <objective>  |  /team status  |  /team cancel"
+                    )),
+                    objective => self.team_start(objective.to_string()),
+                }
+            }
+            "/handoff" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                match args {
+                    "save" => self.handoff_save(),
+                    "history" => self.handoff_history(),
+                    _ => self.handoff_show(), // default: show latest
+                }
             }
             "/clear" => {
                 self.messages.clear();
@@ -796,6 +818,116 @@ impl App {
                 self.push_message(Message::system(label));
                 tokio::spawn(async move {
                     if let Err(e) = bridge.generate_mission(focus).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn graph_stats(&mut self) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                self.push_message(Message::system("Fetching graph statistics..."));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.graph_stats().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn team_start(&mut self, objective: String) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                self.push_message(Message::system(format!("Starting agent team: {}...", &objective[..objective.len().min(60)])));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.team_start(objective).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn team_status(&mut self) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.team_status().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn team_cancel(&mut self) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                self.push_message(Message::system("Cancelling team run..."));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.team_cancel().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn handoff_save(&mut self) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                self.push_message(Message::system("Saving handoff document..."));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.handoff_save().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn handoff_show(&mut self) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.handoff_show().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn handoff_history(&mut self) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.handoff_history().await {
                         let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
                     }
                 });
