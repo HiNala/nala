@@ -77,6 +77,8 @@ from .chunking.splitter import ChunkSplitter, Symbol
 from .chunking.embedder import Embedder
 from .memory.session_memory import SessionMemory
 from .memory.knowledge import KnowledgeBase
+from .handoff.writer import HandoffWriter
+from .handoff.reader import HandoffReader
 
 # Per-process store of proposed actions keyed by action_id.
 # Cleared when a new session starts.
@@ -338,6 +340,33 @@ async def handle_request(
         _pending_actions.pop(action_id, None)
         write_response({"id": req_id, "type": "ok"})
 
+    # ── Handoff: manual save ──────────────────────────────────────────────
+    elif req_type == "handoff_save":
+        try:
+            history = [{"role": m.role, "content": m.content}
+                       for m in agent.context.messages]
+            sid = (agent._session.current_meta.session_id
+                   if agent._session and agent._session.current_meta else "manual")
+            writer = HandoffWriter(root)
+            doc = writer.write(sid, "manual", history)
+            _stream_text(req_id, f"Handoff saved.\n\n{doc.to_markdown()}")
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    # ── Handoff: show latest ───────────────────────────────────────────────
+    elif req_type == "handoff_show":
+        reader = HandoffReader(root)
+        doc = reader.load_latest()
+        if doc:
+            _stream_text(req_id, doc.to_markdown())
+        else:
+            _stream_text(req_id, "No handoff document found.")
+
+    # ── Handoff: history chain ─────────────────────────────────────────────
+    elif req_type == "handoff_history":
+        reader = HandoffReader(root)
+        _stream_text(req_id, reader.format_history())
+
     # ── Memory: project knowledge summary ────────────────────────────────
     elif req_type == "memory_summary":
         kb = KnowledgeBase(root)
@@ -372,9 +401,18 @@ async def handle_request(
         breakdown = agent.get_context_breakdown_text()
         _stream_text(req_id, breakdown)
 
-    # ── Context: manual compaction ────────────────────────────────────────
+    # ── Context: manual compaction (writes handoff first) ────────────────
     elif req_type == "compact_context":
         focus = req.get("focus", "").strip()
+        # Write a handoff before compacting so context is never lost.
+        try:
+            history = [{"role": m.role, "content": m.content}
+                       for m in agent.context.messages]
+            sid = (agent._session.current_meta.session_id
+                   if agent._session and agent._session.current_meta else "compact")
+            HandoffWriter(root).write(sid, "compaction", history)
+        except Exception:
+            pass
         summary_msg = agent.compact_now(focus=focus)
         _stream_text(req_id, f"Compaction complete.\n{summary_msg}")
 
@@ -485,13 +523,19 @@ async def run_ipc_loop(project_root: Optional[str] = None) -> None:
     _embedder = Embedder(str(root))
     agent.set_embedder(_embedder)
 
-    # Inject memory context from previous sessions and knowledge base.
+    # Inject handoff + memory context so the agent resumes seamlessly.
+    handoff_reader = HandoffReader(root)
     session_mem = SessionMemory(root)
     knowledge_base = KnowledgeBase(root)
-    startup_ctx = session_mem.get_startup_injection()
+
+    handoff_ctx = handoff_reader.get_startup_injection()
+    session_ctx = session_mem.get_startup_injection()
     kb_ctx = knowledge_base.load_for_context(max_chars=2000)
-    if startup_ctx:
-        agent.context.inject_system(startup_ctx)
+
+    if handoff_ctx:
+        agent.context.inject_system(handoff_ctx)
+    elif session_ctx:
+        agent.context.inject_system(session_ctx)
     if kb_ctx:
         agent.context.inject_system(f"[PROJECT KNOWLEDGE]\n{kb_ctx}\n[END KNOWLEDGE]")
 
@@ -525,15 +569,20 @@ async def run_ipc_loop(project_root: Optional[str] = None) -> None:
             write_response({"type": "error", "text": f"IPC error: {e}"})
             break
 
-    # Graceful shutdown — save session memory and mark session complete
+    # Graceful shutdown — write handoff, save memory, mark session complete.
     if agent._session:
         try:
-            history = agent.context.messages
+            history = [{"role": m.role, "content": m.content}
+                       for m in agent.context.messages]
+            sid = (agent._session.current_meta.session_id
+                   if agent._session.current_meta else "unknown")
             if history:
-                sid = agent._session.current_meta.session_id if agent._session.current_meta else "unknown"
+                # Write handoff document for continuity
+                writer = HandoffWriter(root)
+                writer.write(sid, "session_end", history)
+                # Save session memory and extract knowledge
                 session_mem = SessionMemory(root)
                 record = session_mem.build_and_save(sid, history)
-                # Promote durable facts to the long-term knowledge base.
                 knowledge_base = KnowledgeBase(root)
                 knowledge_base.extract_from_session(record.to_markdown())
         except Exception:
