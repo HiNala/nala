@@ -46,6 +46,8 @@ pub struct IndexResult {
     pub class_count: usize,
     pub import_count: usize,
     pub index_duration: Duration,
+    /// All extracted symbols (empty when nothing changed).
+    pub symbols: Vec<Symbol>,
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -100,6 +102,7 @@ pub fn index_project(root: &Path) -> Result<IndexResult> {
             class_count: 0,
             import_count: 0,
             index_duration: start.elapsed(),
+            symbols: Vec::new(),
             scan_result,
         });
     } else {
@@ -122,5 +125,6 @@ pub fn index_project(root: &Path) -> Result<IndexResult> {
         class_count,
         import_count,
         index_duration: start.elapsed(),
+        symbols,
     })
 }

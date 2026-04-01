@@ -128,6 +128,85 @@ def upsert_file(path: str, language: str, size_bytes: int) -> tuple[str, dict[st
     )
 
 
+# ── Mission 07 named query API ────────────────────────────────────────────────
+
+def get_file_dependencies(file_path: str) -> tuple[str, dict[str, Any]]:
+    """What modules/files does this file depend on?"""
+    return (
+        """
+        MATCH (f:File {path: $path})-[:IMPORTS]->(m)
+        RETURN m.name AS module, m.path AS path, labels(m)[0] AS kind
+        ORDER BY module
+        """,
+        {"path": file_path},
+    )
+
+
+def get_dependents(module_name: str) -> tuple[str, dict[str, Any]]:
+    """What files import this module?"""
+    return (
+        """
+        MATCH (f:File)-[:IMPORTS]->(m {name: $name})
+        RETURN f.path AS file_path
+        ORDER BY file_path
+        """,
+        {"name": module_name},
+    )
+
+
+def get_function_callers(function_name: str) -> tuple[str, dict[str, Any]]:
+    """What functions call this function?"""
+    return (
+        """
+        MATCH (caller:Function)-[:CALLS]->(fn:Function {name: $name})
+        RETURN caller.name AS caller_name,
+               caller.file_path AS caller_file,
+               caller.start_line AS caller_line
+        ORDER BY caller_file, caller_line
+        """,
+        {"name": function_name},
+    )
+
+
+def get_function_callees(function_name: str) -> tuple[str, dict[str, Any]]:
+    """What functions does this function call?"""
+    return (
+        """
+        MATCH (fn:Function {name: $name})-[:CALLS]->(callee:Function)
+        RETURN callee.name AS callee_name,
+               callee.file_path AS callee_file,
+               callee.start_line AS callee_line
+        ORDER BY callee_file, callee_line
+        """,
+        {"name": function_name},
+    )
+
+
+def get_most_connected_modules(limit: int = 10) -> tuple[str, dict[str, Any]]:
+    """Which modules have the most connections (fan-in + fan-out)?"""
+    return (
+        """
+        MATCH (m:Module)
+        OPTIONAL MATCH (m)<-[:IMPORTS]-(importer)
+        WITH m, count(importer) AS fan_in
+        OPTIONAL MATCH (m)-[:DEPENDS_ON]->(dep)
+        WITH m, fan_in, count(dep) AS fan_out
+        RETURN m.name AS module,
+               fan_in,
+               fan_out,
+               fan_in + fan_out AS total_connections
+        ORDER BY total_connections DESC
+        LIMIT $limit
+        """,
+        {"limit": limit},
+    )
+
+
+def get_complexity_hotspots(threshold: int = 10) -> tuple[str, dict[str, Any]]:
+    """Functions above a complexity threshold (alias for find_high_complexity_functions)."""
+    return find_high_complexity_functions(threshold)
+
+
 def upsert_function(
     func_id: str, name: str, file_path: str,
     start_line: int, end_line: int, cyclomatic: int = 0,
