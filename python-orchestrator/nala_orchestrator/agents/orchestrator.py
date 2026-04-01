@@ -24,6 +24,11 @@ if TYPE_CHECKING:
     from nala_orchestrator.chunking.embedder import Embedder
 
 from ..llm.provider import LLMMessage, create_provider
+from ..context.counter import TokenCounter, TokenUsage
+from ..context.config import CompactionConfig
+from ..context.detector import OpportunityDetector
+from ..context.compactor import Compactor
+from ..context.background_summary import BackgroundSummary
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +127,11 @@ class AgentOrchestrator:
         self._provider = None
         self._session: Optional["SessionManager"] = None
         self._embedder: Optional["Embedder"] = None
+        self._token_counter = TokenCounter(model=getattr(config, "llm_model", "default"))
+        self._compaction_cfg = CompactionConfig()
+        self._detector = OpportunityDetector()
+        self._compactor = Compactor(keep_recent=self._compaction_cfg.keep_recent_turns)
+        self._bg_summary = BackgroundSummary()
 
     # ── Retrieval ──────────────────────────────────────────────────────────
 
@@ -188,6 +198,58 @@ class AgentOrchestrator:
             retrieved_context=retrieved,
         )
 
+    # ── Context window management ──────────────────────────────────────────
+
+    def get_context_usage(self) -> TokenUsage:
+        """Return the current token usage breakdown."""
+        system = self.build_system_prompt()
+        history = [{"role": m.role, "content": m.content} for m in self.context.messages]
+        return self._token_counter.measure_conversation(
+            system_prompt=system,
+            history=history,
+        )
+
+    def get_context_breakdown_text(self) -> str:
+        """Return a formatted context breakdown for display."""
+        usage = self.get_context_usage()
+        return self._token_counter.format_breakdown(usage)
+
+    def compact_now(self, focus: str = "") -> str:
+        """Compact the conversation history and return a summary message."""
+        msgs = self.context.messages
+        history = [{"role": m.role, "content": m.content} for m in msgs]
+
+        new_history, result = self._compactor.compact(
+            history,
+            token_estimate_fn=lambda t: self._token_counter.count(t),
+        )
+
+        # Rebuild message list from compacted history.
+        self.context.messages = [
+            LLMMessage(role=m["role"], content=m["content"])
+            for m in new_history
+        ]
+
+        # Force a fresh background summary from the new (shorter) history.
+        self._bg_summary.force_rebuild(new_history)
+
+        return result.summary
+
+    def _maybe_compact(self, query: str) -> None:
+        """Auto-compact if the detector says it is time."""
+        usage = self.get_context_usage()
+        should = self._detector.should_compact_now(
+            utilization_pct=usage.utilization_pct,
+            history_len=len(self.context.messages),
+            min_turns=self._compaction_cfg.min_turns_before_compact,
+        )
+        if should:
+            logger.info(
+                "Auto-compacting context at %.1f%% utilization",
+                usage.utilization_pct,
+            )
+            self.compact_now()
+
     def update_index_context(self, total_files: int, total_symbols: int) -> None:
         """Update the context with fresh index data."""
         self.context.total_files = total_files
@@ -207,6 +269,8 @@ class AgentOrchestrator:
             )
 
         session = self.ensure_session()
+        self._detector.mark_user_message()
+        self._maybe_compact(user_message)
         self.context.add_user(user_message)
         self.context.trim_to_limit()
         session.append_turn("user", user_message)
@@ -219,6 +283,9 @@ class AgentOrchestrator:
             )
             self.context.add_assistant(response.content)
             session.append_turn("assistant", response.content)
+            self._detector.mark_assistant_response()
+            history = [{"role": m.role, "content": m.content} for m in self.context.messages]
+            self._bg_summary.on_turn(history)
             return response.content
         except Exception as e:
             logger.error("LLM query failed: %s", e)

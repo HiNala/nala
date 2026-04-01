@@ -336,6 +336,17 @@ async def handle_request(
         _pending_actions.pop(action_id, None)
         write_response({"id": req_id, "type": "ok"})
 
+    # ── Context: usage breakdown ──────────────────────────────────────────
+    elif req_type == "context_usage":
+        breakdown = agent.get_context_breakdown_text()
+        _stream_text(req_id, breakdown)
+
+    # ── Context: manual compaction ────────────────────────────────────────
+    elif req_type == "compact_context":
+        focus = req.get("focus", "").strip()
+        summary_msg = agent.compact_now(focus=focus)
+        _stream_text(req_id, f"Compaction complete.\n{summary_msg}")
+
     # ── Session: summary ──────────────────────────────────────────────────
     elif req_type == "session_summary":
         session = agent._session

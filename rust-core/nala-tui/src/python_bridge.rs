@@ -66,6 +66,10 @@ pub enum BridgeRequest {
     ApplyAction { action_id: String },
     /// Skip (discard) a proposed action.
     SkipAction { action_id: String },
+    /// Request a context window usage breakdown.
+    ContextUsage,
+    /// Trigger manual context compaction with optional focus hint.
+    CompactContext { focus: String },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -162,6 +166,22 @@ impl PythonBridge {
     pub async fn skip_action(&self, action_id: String) -> Result<()> {
         self.request_tx
             .send(BridgeRequest::SkipAction { action_id })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Request the current context window usage breakdown.
+    pub async fn context_usage(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::ContextUsage)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Trigger manual context compaction.
+    pub async fn compact_context(&self, focus: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::CompactContext { focus })
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -335,6 +355,15 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "skip_action",
                                 "action_id": action_id,
+                            }),
+                            BridgeRequest::ContextUsage => json!({
+                                "id": id,
+                                "type": "context_usage",
+                            }),
+                            BridgeRequest::CompactContext { focus } => json!({
+                                "id": id,
+                                "type": "compact_context",
+                                "focus": focus,
                             }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {

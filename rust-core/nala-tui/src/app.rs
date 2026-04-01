@@ -592,7 +592,7 @@ impl App {
         match parts[0] {
             "/help" => {
                 self.push_message(Message::assistant(
-                    "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /act <instruction>  — ask AI to make changes (with diff preview + confirm)\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
+                    "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /act <instruction>  — ask AI to make changes (with diff preview + confirm)\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /context            — show context window usage breakdown\n  /compact            — compact context window to free tokens\n  /compact <focus>    — compact while preserving focus topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
                 ));
             }
             "/quit" | "/exit" => {
@@ -626,11 +626,49 @@ impl App {
                     self.send_action_query(query);
                 }
             }
+            "/context" => {
+                self.show_context_usage();
+            }
+            "/compact" => {
+                let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.compact_context(focus);
+            }
             "/clear" => {
                 self.messages.clear();
             }
             _ => {
                 self.push_message(Message::error(format!("Unknown command: {}. Type /help.", parts[0])));
+            }
+        }
+    }
+
+    fn show_context_usage(&mut self) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.context_usage().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn compact_context(&mut self, focus: String) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                self.push_message(Message::system("Compacting context window..."));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.compact_context(focus).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
             }
         }
     }
