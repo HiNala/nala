@@ -43,6 +43,13 @@ enum Commands {
 
     /// Launch the interactive terminal UI (default when no subcommand given)
     Tui,
+
+    /// Start the optional web dashboard on localhost
+    Dashboard {
+        /// Port to listen on (default: 3000)
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
+    },
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
@@ -57,6 +64,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Scan) => run_scan(&cli.path).await,
         Some(Commands::Index) => run_index(&cli.path).await,
+        Some(Commands::Dashboard { port }) => run_dashboard(&cli.path, port).await,
         Some(Commands::Tui) | None => run_tui(&cli.path).await,
     }
 }
@@ -95,6 +103,58 @@ async fn run_index(path: &PathBuf) -> Result<()> {
         result.function_count, result.class_count, result.import_count
     );
     Ok(())
+}
+
+async fn run_dashboard(path: &PathBuf, port: u16) -> Result<()> {
+    let root_str = path.canonicalize().unwrap_or_else(|_| path.clone());
+    println!(
+        "Starting Nala dashboard on http://127.0.0.1:{} (project: {})",
+        port,
+        root_str.display()
+    );
+    println!("Press Ctrl+C to stop.");
+
+    // Find the dashboard directory (sibling of rust-core)
+    let _exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+
+    // Walk up from exe dir to find dashboard/server.py
+    let dashboard_dir = [
+        // repo root relative paths
+        std::path::PathBuf::from("dashboard"),
+        std::path::PathBuf::from("../dashboard"),
+        std::path::PathBuf::from("../../dashboard"),
+    ]
+    .into_iter()
+    .find(|p| p.join("server.py").exists())
+    .unwrap_or_else(|| std::path::PathBuf::from("dashboard"));
+
+    let status = std::process::Command::new("python")
+        .args([
+            "-m",
+            "uvicorn",
+            "dashboard.server:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+        ])
+        .env("DASHBOARD_PORT", port.to_string())
+        .current_dir(dashboard_dir.parent().unwrap_or(&dashboard_dir))
+        .status();
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => {
+            anyhow::bail!("Dashboard process exited with code {}", s.code().unwrap_or(-1))
+        }
+        Err(e) => {
+            eprintln!("Failed to start dashboard: {e}");
+            eprintln!("Make sure uvicorn is installed: pip install uvicorn fastapi");
+            Err(e.into())
+        }
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
