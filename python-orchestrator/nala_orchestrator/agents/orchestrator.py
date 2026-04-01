@@ -103,12 +103,22 @@ class ConversationContext:
     total_files: int = 0
     total_symbols: int = 0
     primary_language: str = "unknown"
+    _system_injections: list[str] = field(default_factory=list)
 
     def add_user(self, text: str) -> None:
         self.messages.append(LLMMessage(role="user", content=text))
 
     def add_assistant(self, text: str) -> None:
         self.messages.append(LLMMessage(role="assistant", content=text))
+
+    def inject_system(self, text: str) -> None:
+        """Add extra context that is appended to the system prompt."""
+        if text and text.strip():
+            self._system_injections.append(text.strip())
+
+    def get_system_injections(self) -> str:
+        """Return all injected system context as a single block."""
+        return "\n\n".join(self._system_injections)
 
     def trim_to_limit(self, max_messages: int = 20) -> None:
         """Keep only the most recent messages to avoid context overflow."""
@@ -189,7 +199,7 @@ class AgentOrchestrator:
     def build_system_prompt(self, query: str = "") -> str:
         """Build the system prompt with current project context and retrieved chunks."""
         retrieved = self._retrieve_context(query) if query else "(no query provided)"
-        return SYSTEM_PROMPT_TEMPLATE.format(
+        base = SYSTEM_PROMPT_TEMPLATE.format(
             project_name=Path(self.context.project_root).name,
             project_root=self.context.project_root,
             total_files=self.context.total_files,
@@ -197,6 +207,10 @@ class AgentOrchestrator:
             primary_language=self.context.primary_language,
             retrieved_context=retrieved,
         )
+        injections = self.context.get_system_injections()
+        if injections:
+            base = base + "\n\n" + injections
+        return base
 
     # ── Context window management ──────────────────────────────────────────
 

@@ -75,6 +75,8 @@ from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
 from .chunking.splitter import ChunkSplitter, Symbol
 from .chunking.embedder import Embedder
+from .memory.session_memory import SessionMemory
+from .memory.knowledge import KnowledgeBase
 
 # Per-process store of proposed actions keyed by action_id.
 # Cleared when a new session starts.
@@ -336,6 +338,35 @@ async def handle_request(
         _pending_actions.pop(action_id, None)
         write_response({"id": req_id, "type": "ok"})
 
+    # ── Memory: project knowledge summary ────────────────────────────────
+    elif req_type == "memory_summary":
+        kb = KnowledgeBase(root)
+        sm_mem = SessionMemory(root)
+        kb_text = kb.get_summary()
+        recent = sm_mem.list_sessions(5)
+        sessions_text = "\n".join(
+            f"  {s['session_id']}: {s['summary']}" for s in recent
+        ) or "  (no sessions yet)"
+        text = f"{kb_text}\n\nRecent sessions:\n{sessions_text}"
+        _stream_text(req_id, text)
+
+    # ── Memory: list sessions ─────────────────────────────────────────────
+    elif req_type == "memory_sessions":
+        sm_mem = SessionMemory(root)
+        sessions = sm_mem.list_sessions(30)
+        write_response({"id": req_id, "type": "memory_sessions", "sessions": sessions})
+
+    # ── Memory: forget a topic ─────────────────────────────────────────────
+    elif req_type == "memory_forget":
+        topic = req.get("topic", "").strip()
+        if not topic:
+            write_response({"id": req_id, "type": "error", "text": "Missing topic"})
+        else:
+            kb = KnowledgeBase(root)
+            count = kb.remove_fact(topic)
+            write_response({"id": req_id, "type": "ok",
+                            "text": f"Removed {count} fact(s) matching '{topic}'"})
+
     # ── Context: usage breakdown ──────────────────────────────────────────
     elif req_type == "context_usage":
         breakdown = agent.get_context_breakdown_text()
@@ -454,6 +485,16 @@ async def run_ipc_loop(project_root: Optional[str] = None) -> None:
     _embedder = Embedder(str(root))
     agent.set_embedder(_embedder)
 
+    # Inject memory context from previous sessions and knowledge base.
+    session_mem = SessionMemory(root)
+    knowledge_base = KnowledgeBase(root)
+    startup_ctx = session_mem.get_startup_injection()
+    kb_ctx = knowledge_base.load_for_context(max_chars=2000)
+    if startup_ctx:
+        agent.context.inject_system(startup_ctx)
+    if kb_ctx:
+        agent.context.inject_system(f"[PROJECT KNOWLEDGE]\n{kb_ctx}\n[END KNOWLEDGE]")
+
     # Signal ready
     write_response({
         "type": "ready",
@@ -484,8 +525,19 @@ async def run_ipc_loop(project_root: Optional[str] = None) -> None:
             write_response({"type": "error", "text": f"IPC error: {e}"})
             break
 
-    # Graceful shutdown — mark session complete
+    # Graceful shutdown — save session memory and mark session complete
     if agent._session:
+        try:
+            history = agent.context.messages
+            if history:
+                sid = agent._session.current_meta.session_id if agent._session.current_meta else "unknown"
+                session_mem = SessionMemory(root)
+                record = session_mem.build_and_save(sid, history)
+                # Promote durable facts to the long-term knowledge base.
+                knowledge_base = KnowledgeBase(root)
+                knowledge_base.extract_from_session(record.to_markdown())
+        except Exception:
+            pass  # Never crash on shutdown
         agent._session.complete()
 
 
