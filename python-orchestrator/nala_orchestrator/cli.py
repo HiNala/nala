@@ -35,6 +35,7 @@ from typing import Optional
 
 from .config import Config
 from .agents.orchestrator import AgentOrchestrator
+from .perspectives.engine import PerspectivesEngine, format_results_as_text
 
 # Flush immediately — Rust reads line-by-line
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
@@ -70,6 +71,48 @@ async def handle_request(req: dict, agent: AgentOrchestrator) -> None:
             async for chunk in agent.stream_query(text):
                 write_response({"id": req_id, "type": "chunk", "text": chunk})
             write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "run_perspectives":
+        project_root = req.get("project_root") or str(root)
+        perspective_name = req.get("perspective", "all")
+
+        try:
+            engine = PerspectivesEngine(config)
+
+            if perspective_name == "all":
+                results = await engine.run_all(project_root)
+            else:
+                result = await engine.run_one(perspective_name, project_root)
+                results = [result] if result else []
+
+            text = format_results_as_text(results)
+            # Stream the formatted report as chunks (reuses AssistantChunk infra)
+            chunk_size = 200
+            for i in range(0, len(text), chunk_size):
+                write_response({"id": req_id, "type": "chunk", "text": text[i:i + chunk_size]})
+            write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Analysis error: {e}"})
+
+    elif req_type == "list_sessions":
+        project_root = req.get("project_root") or str(root)
+        try:
+            from .sessions.manager import SessionManager
+            sm = SessionManager(root)
+            sessions = sm.list_sessions()
+            session_list = [
+                {
+                    "session_id": s.session_id,
+                    "created_at": s.created_at,
+                    "project_name": s.project_name,
+                    "status": s.status,
+                    "perspectives_run": s.perspectives_run,
+                }
+                for s in sessions[:20]
+            ]
+            write_response({"id": req_id, "type": "sessions", "sessions": session_list})
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": str(e)})
 

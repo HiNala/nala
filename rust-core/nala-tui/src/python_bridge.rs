@@ -42,30 +42,48 @@ fn next_id() -> String {
     NEXT_ID.fetch_add(1, Ordering::Relaxed).to_string()
 }
 
-// ── QueryRequest ───────────────────────────────────────────────────────────
+// ── Request types ──────────────────────────────────────────────────────────
 
-/// A query to send to the Python subprocess.
-pub struct QueryRequest {
-    pub text: String,
-    pub project_root: PathBuf,
+/// The kind of request to send to the Python subprocess.
+pub enum BridgeRequest {
+    /// Natural-language LLM query.
+    Query { text: String, project_root: PathBuf },
+    /// Run all analysis perspectives.
+    RunPerspectives { project_root: PathBuf, perspective: String },
+    /// List past sessions.
+    ListSessions { project_root: PathBuf },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
 
-/// Handle for sending queries to the background Python bridge task.
+/// Handle for sending requests to the background Python bridge task.
 ///
 /// Clone freely — all clones share the same underlying channel.
 #[derive(Clone)]
 pub struct PythonBridge {
-    query_tx: mpsc::Sender<QueryRequest>,
+    request_tx: mpsc::Sender<BridgeRequest>,
 }
 
 impl PythonBridge {
-    /// Send a natural-language query. Responses arrive on the `BackgroundEvent`
-    /// channel that was passed to `spawn()`.
+    /// Send a natural-language query.
     pub async fn query(&self, text: String, project_root: PathBuf) -> Result<()> {
-        self.query_tx
-            .send(QueryRequest { text, project_root })
+        self.request_tx
+            .send(BridgeRequest::Query { text, project_root })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Run all (or one named) analysis perspective.
+    pub async fn run_perspectives(
+        &self,
+        project_root: PathBuf,
+        perspective: &str,
+    ) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::RunPerspectives {
+                project_root,
+                perspective: perspective.to_string(),
+            })
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -84,7 +102,7 @@ pub async fn spawn(
     project_root: &PathBuf,
     bg_tx: mpsc::Sender<BackgroundEvent>,
 ) -> Result<PythonBridge> {
-    let (query_tx, query_rx) = mpsc::channel::<QueryRequest>(32);
+    let (query_tx, query_rx) = mpsc::channel::<BridgeRequest>(32);
 
     let root = project_root.clone();
     let root_str = root.to_string_lossy().to_string();
@@ -137,7 +155,7 @@ pub async fn spawn(
         .send(BackgroundEvent::BridgeReady { has_llm })
         .await;
 
-    Ok(PythonBridge { query_tx })
+    Ok(PythonBridge { request_tx: query_tx })
 }
 
 // ── bridge_task ────────────────────────────────────────────────────────────
@@ -147,7 +165,7 @@ async fn bridge_task(
     mut child: Child,
     mut stdin: ChildStdin,
     stdout: ChildStdout,
-    mut query_rx: mpsc::Receiver<QueryRequest>,
+    mut query_rx: mpsc::Receiver<BridgeRequest>,
     bg_tx: mpsc::Sender<BackgroundEvent>,
     ready_tx: tokio::sync::oneshot::Sender<Result<bool>>,
 ) -> Result<()> {
@@ -182,21 +200,34 @@ async fn bridge_task(
     // ── Main dispatch loop ─────────────────────────────────────────────────
     loop {
         tokio::select! {
-            // Incoming query from the TUI
+            // Incoming request from the TUI
             maybe_req = query_rx.recv() => {
                 match maybe_req {
                     None => break, // All PythonBridge handles dropped
                     Some(req) => {
                         let id = next_id();
-                        let msg = json!({
-                            "id": id,
-                            "type": "query",
-                            "text": req.text,
-                            "project_root": req.project_root.to_string_lossy(),
-                        });
+                        let msg = match req {
+                            BridgeRequest::Query { text, project_root } => json!({
+                                "id": id,
+                                "type": "query",
+                                "text": text,
+                                "project_root": project_root.to_string_lossy(),
+                            }),
+                            BridgeRequest::RunPerspectives { project_root, perspective } => json!({
+                                "id": id,
+                                "type": "run_perspectives",
+                                "project_root": project_root.to_string_lossy(),
+                                "perspective": perspective,
+                            }),
+                            BridgeRequest::ListSessions { project_root } => json!({
+                                "id": id,
+                                "type": "list_sessions",
+                                "project_root": project_root.to_string_lossy(),
+                            }),
+                        };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
                             let _ = bg_tx.send(BackgroundEvent::AssistantError(
-                                format!("Failed to send query: {e}")
+                                format!("Failed to send request: {e}")
                             )).await;
                         }
                     }

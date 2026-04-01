@@ -52,6 +52,42 @@ def find_circular_dependencies() -> tuple[str, dict]:
     )
 
 
+def find_isolated_functions() -> tuple[str, dict]:
+    """Find functions that are defined but never called (dead code)."""
+    return (
+        """
+        MATCH (fn:Function)
+        WHERE NOT (fn)<-[:CALLS]-()
+          AND fn.visibility <> 'public'
+        RETURN fn.name AS name,
+               fn.file_path AS file_path,
+               fn.start_line AS start_line
+        ORDER BY fn.file_path, fn.start_line
+        """,
+        {},
+    )
+
+
+def find_high_coupling(fan_out: int = 15, fan_in: int = 10) -> tuple[str, dict]:
+    """Find files with unusually high import coupling."""
+    return (
+        """
+        MATCH (f:File)-[:IMPORTS]->(m)
+        WITH f, count(m) AS out_count
+        WHERE out_count >= $fan_out
+        RETURN f.path AS file, out_count AS fan_out_count, 'high_fan_out' AS kind
+        UNION
+        MATCH (f:File)-[:IMPORTS]->(m)
+        WITH m, count(f) AS in_count
+        WHERE in_count >= $fan_in
+        RETURN m.path AS file, in_count AS fan_out_count, 'high_fan_in' AS kind
+        ORDER BY fan_out_count DESC
+        LIMIT 20
+        """,
+        {"fan_out": fan_out, "fan_in": fan_in},
+    )
+
+
 def find_dead_functions() -> tuple[str, dict]:
     """Find functions that are defined but never called."""
     return (

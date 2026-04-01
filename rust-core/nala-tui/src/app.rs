@@ -383,6 +383,31 @@ impl App {
         }
     }
 
+    fn run_perspectives(&mut self, perspective: String) {
+        match &self.python_bridge {
+            None => {
+                self.messages.push(Message::system(
+                    "AI bridge is starting up — please wait a moment and try again.",
+                ));
+            }
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let root = self.project_root.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                self.messages.push(Message::system(format!(
+                    "Running {} analysis...",
+                    if perspective == "all" { "full".to_string() } else { perspective.clone() }
+                )));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.run_perspectives(root, &perspective).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+        }
+    }
+
     fn send_llm_query(&mut self, text: String) {
         match &self.python_bridge {
             None => {
@@ -414,7 +439,7 @@ impl App {
         match parts[0] {
             "/help" => {
                 self.messages.push(Message::assistant(
-                    "Available commands:\n  /scan    — scan project files\n  /index   — full index (parse + symbols)\n  /analyze — run analysis perspectives\n  /session — list sessions\n  /help    — show this help\n  /quit    — exit\n\nOr just type a question to ask the AI.",
+                    "Available commands:\n  /scan              — scan project files\n  /index             — full index (parse + symbols)\n  /analyze           — run all analysis perspectives\n  /analyze security  — run security perspective only\n  /analyze complexity — run complexity perspective only\n  /session           — list sessions\n  /clear             — clear message log\n  /help              — show this help\n  /quit              — exit\n\nOr just type a question to ask the AI.",
                 ));
             }
             "/quit" | "/exit" => {
@@ -427,6 +452,10 @@ impl App {
             "/index" => {
                 self.messages.push(Message::system("Indexing project..."));
                 self.start_background_index();
+            }
+            "/analyze" | "/analyse" => {
+                let perspective = parts.get(1).copied().unwrap_or("all").to_string();
+                self.run_perspectives(perspective);
             }
             "/clear" => {
                 self.messages.clear();
