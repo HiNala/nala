@@ -25,10 +25,27 @@ impl LspServer {
     pub fn command(&self) -> Option<&'static str> {
         match self {
             Self::RustAnalyzer => Some("rust-analyzer"),
-            Self::Pyright => Some("pyright-langserver --stdio"),
-            Self::TypeScriptLanguageServer => Some("typescript-language-server --stdio"),
+            Self::Pyright => Some("pyright-langserver"),
+            Self::TypeScriptLanguageServer => Some("typescript-language-server"),
             Self::Gopls => Some("gopls"),
             Self::None => None,
+        }
+    }
+
+    /// Returns the (executable, args) pair to spawn this server.
+    pub fn command_and_args(&self) -> (String, Vec<String>) {
+        match self {
+            Self::RustAnalyzer => ("rust-analyzer".into(), vec![]),
+            Self::Pyright => (
+                "pyright-langserver".into(),
+                vec!["--stdio".into()],
+            ),
+            Self::TypeScriptLanguageServer => (
+                "typescript-language-server".into(),
+                vec!["--stdio".into()],
+            ),
+            Self::Gopls => ("gopls".into(), vec![]),
+            Self::None => ("true".into(), vec![]), // no-op
         }
     }
 }
