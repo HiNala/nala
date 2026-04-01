@@ -8,15 +8,11 @@ a question in the TUI, it comes here. The orchestrator:
   2. Constructs a system prompt explaining Nala's capabilities and the project
   3. Sends the conversation to the configured LLM provider
   4. Streams the response back to the caller (the TUI)
-
-The context window is managed carefully. Large codebases can have millions
-of tokens of source code — we select the most relevant context rather than
-dumping everything in.
+  5. Logs every turn to the active session (conversation.jsonl)
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +20,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
+    from nala_orchestrator.sessions.manager import SessionManager
 
 from ..llm.provider import LLMMessage, create_provider
 
@@ -81,6 +78,40 @@ class AgentOrchestrator:
             project_root=str(config.project_root),
         )
         self._provider = None
+        self._session: Optional["SessionManager"] = None
+
+    # ── Session management ─────────────────────────────────────────────────
+
+    def set_session(self, session_manager: "SessionManager") -> None:
+        """Attach a SessionManager so turns are logged to disk."""
+        self._session = session_manager
+
+    def ensure_session(self) -> "SessionManager":
+        """Return the current session, creating a new one if needed."""
+        if self._session is None:
+            from nala_orchestrator.sessions.manager import SessionManager
+            sm = SessionManager(Path(self.context.project_root))
+            sm.new_session()
+            self._session = sm
+        return self._session
+
+    def restore_history(self, session_manager: "SessionManager") -> None:
+        """
+        Reload conversation history from a saved session into in-memory context.
+        Called when resuming a past session.
+        """
+        self._session = session_manager
+        for turn in session_manager.get_conversation_history():
+            role = turn.get("role", "user")
+            content = turn.get("content", "")
+            if role == "user":
+                self.context.messages.append(LLMMessage(role="user", content=content))
+            elif role == "assistant":
+                self.context.messages.append(LLMMessage(role="assistant", content=content))
+        # Keep the last 20 turns to avoid context overflow
+        self.context.trim_to_limit(max_messages=20)
+
+    # ── LLM interface ──────────────────────────────────────────────────────
 
     def _get_provider(self):
         if self._provider is None:
@@ -101,6 +132,11 @@ class AgentOrchestrator:
         """Update the context with fresh index data."""
         self.context.total_files = total_files
         self.context.total_symbols = total_symbols
+        if self._session:
+            self._session.update_meta(
+                total_files=total_files,
+                total_symbols=total_symbols,
+            )
 
     async def query(self, user_message: str) -> str:
         """Send a query and return the complete response."""
@@ -110,8 +146,10 @@ class AgentOrchestrator:
                 "Add ANTHROPIC_API_KEY (or OPENAI_API_KEY, GOOGLE_API_KEY) to your .env file."
             )
 
+        session = self.ensure_session()
         self.context.add_user(user_message)
         self.context.trim_to_limit()
+        session.append_turn("user", user_message)
 
         try:
             provider = self._get_provider()
@@ -120,6 +158,7 @@ class AgentOrchestrator:
                 system_prompt=self.build_system_prompt(),
             )
             self.context.add_assistant(response.content)
+            session.append_turn("assistant", response.content)
             return response.content
         except Exception as e:
             logger.error("LLM query failed: %s", e)
@@ -136,10 +175,12 @@ class AgentOrchestrator:
             )
             return
 
+        session = self.ensure_session()
         self.context.add_user(user_message)
         self.context.trim_to_limit()
+        session.append_turn("user", user_message)
 
-        full_response = []
+        full_response: list[str] = []
         try:
             provider = self._get_provider()
             async for chunk in provider.stream_chat(
@@ -153,4 +194,6 @@ class AgentOrchestrator:
             yield f"\n\nError: {e}"
 
         if full_response:
-            self.context.add_assistant("".join(full_response))
+            assembled = "".join(full_response)
+            self.context.add_assistant(assembled)
+            session.append_turn("assistant", assembled)

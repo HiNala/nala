@@ -52,6 +52,14 @@ pub enum BridgeRequest {
     RunPerspectives { project_root: PathBuf, perspective: String },
     /// List past sessions.
     ListSessions { project_root: PathBuf },
+    /// Create a new session.
+    NewSession,
+    /// Load an existing session by ID.
+    LoadSession { session_id: String },
+    /// Get the current session summary.
+    SessionSummary,
+    /// Generate a mission document (optionally with a focus).
+    GenerateMission { focus: String },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -84,6 +92,46 @@ impl PythonBridge {
                 project_root,
                 perspective: perspective.to_string(),
             })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// List past sessions.
+    pub async fn list_sessions(&self, project_root: PathBuf) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::ListSessions { project_root })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Create a new session.
+    pub async fn new_session(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::NewSession)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Load a session by ID.
+    pub async fn load_session(&self, session_id: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::LoadSession { session_id })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Get the current session summary.
+    pub async fn session_summary(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::SessionSummary)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Generate a mission document.
+    pub async fn generate_mission(&self, focus: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::GenerateMission { focus })
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -224,6 +272,24 @@ async fn bridge_task(
                                 "type": "list_sessions",
                                 "project_root": project_root.to_string_lossy(),
                             }),
+                            BridgeRequest::NewSession => json!({
+                                "id": id,
+                                "type": "new_session",
+                            }),
+                            BridgeRequest::LoadSession { session_id } => json!({
+                                "id": id,
+                                "type": "load_session",
+                                "session_id": session_id,
+                            }),
+                            BridgeRequest::SessionSummary => json!({
+                                "id": id,
+                                "type": "session_summary",
+                            }),
+                            BridgeRequest::GenerateMission { focus } => json!({
+                                "id": id,
+                                "type": "generate_mission",
+                                "focus": focus,
+                            }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
                             let _ = bg_tx.send(BackgroundEvent::AssistantError(
@@ -299,6 +365,53 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 .unwrap_or("Unknown error")
                 .to_string();
             let _ = bg_tx.send(BackgroundEvent::AssistantError(text)).await;
+        }
+        "sessions" => {
+            // Format session list as a text block
+            let sessions = msg.get("sessions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let text = if sessions.is_empty() {
+                "No sessions found. Start one by asking a question.".to_string()
+            } else {
+                let mut lines = vec!["**Past sessions** (newest first):".to_string()];
+                for s in &sessions {
+                    let id = s.get("session_id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let turns = s.get("total_turns").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let status = s.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                    lines.push(format!("  • {} — {} turns, {}", id, turns, status));
+                }
+                lines.push("\nUse `/session load <id>` to resume a session.".to_string());
+                lines.join("\n")
+            };
+            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        "session_created" => {
+            let session_id = msg.get("session_id").and_then(|v| v.as_str()).unwrap_or("?");
+            let text = format!("New session created: **{}**", session_id);
+            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        "session_loaded" => {
+            let session_id = msg.get("session_id").and_then(|v| v.as_str()).unwrap_or("?");
+            let turns = msg.get("turn_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let summary = msg.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+            let text = format!(
+                "Session **{}** loaded ({} turns).{}",
+                session_id,
+                turns,
+                if summary.is_empty() { String::new() } else { format!("\n{}", summary) }
+            );
+            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        "session_summary" => {
+            let text = msg
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("No session active.")
+                .to_string();
+            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
         }
         // "pong", "ok", "ready" — informational, no UI event needed
         _ => {}

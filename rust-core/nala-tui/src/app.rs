@@ -439,7 +439,7 @@ impl App {
         match parts[0] {
             "/help" => {
                 self.messages.push(Message::assistant(
-                    "Available commands:\n  /scan              — scan project files\n  /index             — full index (parse + symbols)\n  /analyze           — run all analysis perspectives\n  /analyze security  — run security perspective only\n  /analyze complexity — run complexity perspective only\n  /session           — list sessions\n  /clear             — clear message log\n  /help              — show this help\n  /quit              — exit\n\nOr just type a question to ask the AI.",
+                    "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
                 ));
             }
             "/quit" | "/exit" => {
@@ -457,11 +457,124 @@ impl App {
                 let perspective = parts.get(1).copied().unwrap_or("all").to_string();
                 self.run_perspectives(perspective);
             }
+            "/session" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.handle_session_command(args);
+            }
+            "/generate" => {
+                let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.generate_mission(focus);
+            }
             "/clear" => {
                 self.messages.clear();
             }
             _ => {
                 self.messages.push(Message::error(format!("Unknown command: {}. Type /help.", parts[0])));
+            }
+        }
+    }
+
+    fn handle_session_command(&mut self, args: &str) {
+        let sub: Vec<&str> = args.splitn(2, ' ').collect();
+        match sub[0] {
+            "" => {
+                // List sessions
+                match &self.python_bridge {
+                    None => self.messages.push(Message::system("AI bridge not ready.")),
+                    Some(bridge) => {
+                        let bridge = bridge.clone();
+                        let root = self.project_root.clone();
+                        let tx = self.bg_tx.clone();
+                        self.messages.push(Message::system("Fetching sessions..."));
+                        tokio::spawn(async move {
+                            if let Err(e) = bridge.list_sessions(root).await {
+                                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                            }
+                        });
+                    }
+                }
+            }
+            "new" => {
+                match &self.python_bridge {
+                    None => self.messages.push(Message::system("AI bridge not ready.")),
+                    Some(bridge) => {
+                        let bridge = bridge.clone();
+                        let tx = self.bg_tx.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = bridge.new_session().await {
+                                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                            }
+                        });
+                    }
+                }
+            }
+            "load" => {
+                let session_id = sub.get(1).copied().unwrap_or("").trim().to_string();
+                if session_id.is_empty() {
+                    self.messages.push(Message::error("Usage: /session load <session_id>"));
+                    return;
+                }
+                match &self.python_bridge {
+                    None => self.messages.push(Message::system("AI bridge not ready.")),
+                    Some(bridge) => {
+                        let bridge = bridge.clone();
+                        let tx = self.bg_tx.clone();
+                        self.messages.push(Message::system(format!("Loading session {}...", session_id)));
+                        tokio::spawn(async move {
+                            if let Err(e) = bridge.load_session(session_id).await {
+                                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                            }
+                        });
+                    }
+                }
+            }
+            "summary" => {
+                match &self.python_bridge {
+                    None => self.messages.push(Message::system("AI bridge not ready.")),
+                    Some(bridge) => {
+                        let bridge = bridge.clone();
+                        let tx = self.bg_tx.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = bridge.session_summary().await {
+                                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                            }
+                        });
+                    }
+                }
+            }
+            _ => {
+                self.messages.push(Message::error(
+                    format!("Unknown session subcommand: '{}'. Use: new, load <id>, summary.", sub[0])
+                ));
+            }
+        }
+    }
+
+    fn generate_mission(&mut self, focus: String) {
+        match &self.python_bridge {
+            None => {
+                self.messages.push(Message::system("AI bridge not ready."));
+            }
+            Some(_) if !self.llm_available => {
+                self.messages.push(Message::system(
+                    "No LLM configured — cannot generate mission. Add an API key to .env."
+                ));
+            }
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                let label = if focus.is_empty() {
+                    "Generating mission document...".to_string()
+                } else {
+                    format!("Generating mission focused on: {}...", focus)
+                };
+                self.messages.push(Message::system(label));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.generate_mission(focus).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
             }
         }
     }

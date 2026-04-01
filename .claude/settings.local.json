@@ -12,7 +12,19 @@
       "Bash(export PATH=\"$PATH:/c/Users/NalaBook/.cargo/bin\")",
       "Bash(/c/Users/NalaBook/.cargo/bin/cargo check:*)",
       "Bash(git remote:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git config:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(cargo build:*)",
+      "Bash(export PATH=\"$PATH:$HOME/.cargo/bin\")",
+      "Bash(xargs ls:*)",
+      "Bash(python -m py_compile nala_orchestrator/perspectives/security.py nala_orchestrator/perspectives/duplication.py nala_orchestrator/perspectives/test_coverage.py nala_orchestrator/perspectives/dead_code.py nala_orchestrator/perspectives/dependency.py nala_orchestrator/perspectives/engine.py nala_orchestrator/cli.py)",
+      "Bash(xargs wc:*)",
+      "Read(//c/mnt/c/Users/**)",
+      "Read(//c/Users//**)",
+      "Bash(~/.cargo/bin/cargo --version)",
+      "Bash(~/.cargo/bin/cargo check:*)"
     ]
   }
 }

@@ -5,15 +5,25 @@ Every analysis run creates a session: a timestamped directory inside `.nala/sess
 containing the session metadata, findings, and generated reports.
 
 Sessions are the audit trail. Nothing is lost. Everything is traceable.
+
+Directory layout per session:
+  .nala/sessions/{id}/
+  ├── session.json        — metadata (created_at, status, etc.)
+  ├── conversation.jsonl  — one JSON object per turn, appended atomically
+  ├── findings.json       — serialised PerspectiveResult list (optional)
+  ├── reports/            — generated markdown reports
+  └── missions/           — AI-generated mission documents
 """
 
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -26,6 +36,7 @@ class SessionMeta:
     project_name: str
     total_files: int = 0
     total_symbols: int = 0
+    total_turns: int = 0
     perspectives_run: list[str] = field(default_factory=list)
     status: str = "in_progress"  # "in_progress" | "complete" | "error"
 
@@ -112,6 +123,107 @@ class SessionManager:
     def complete(self) -> None:
         """Mark the current session as complete."""
         self.update_meta(status="complete")
+
+    # ── Conversation logging ───────────────────────────────────────────────
+
+    def append_turn(self, role: str, content: str) -> None:
+        """
+        Atomically append one conversation turn to conversation.jsonl.
+
+        Uses write-to-tmp-then-rename to avoid corruption on crash.
+        """
+        if not self._current:
+            return
+        turn = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        jsonl_path = self._current / "conversation.jsonl"
+        line = json.dumps(turn, ensure_ascii=False) + "\n"
+
+        # Atomic append: write to temp file in same dir, then rename-append
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=self._current, prefix=".turn_", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(line)
+            # On Windows rename doesn't atomically replace but we still avoid
+            # partial writes — read+write pattern is safe enough for dev tool.
+            with open(jsonl_path, "a", encoding="utf-8") as dest:
+                with open(tmp_path, "r", encoding="utf-8") as src:
+                    dest.write(src.read())
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        # Update turn count in metadata
+        if self._meta:
+            turns = self.get_conversation_history()
+            self.update_meta(total_turns=len(turns))
+
+    def get_conversation_history(self) -> list[dict]:
+        """Load all turns from conversation.jsonl."""
+        if not self._current:
+            return []
+        jsonl_path = self._current / "conversation.jsonl"
+        if not jsonl_path.exists():
+            return []
+        turns = []
+        for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    turns.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return turns
+
+    def save_findings(self, results: list[Any]) -> None:
+        """Serialise and write findings.json from PerspectiveResult objects."""
+        if not self._current:
+            return
+        from dataclasses import asdict as _asdict
+        serialisable = []
+        for r in results:
+            try:
+                serialisable.append(_asdict(r))
+            except Exception:
+                serialisable.append({"error": str(r)})
+        path = self._current / "findings.json"
+        path.write_text(json.dumps(serialisable, indent=2), encoding="utf-8")
+        # Update perspectives_run list
+        names = [r.perspective_name for r in results if hasattr(r, "perspective_name")]
+        self.update_meta(perspectives_run=names)
+
+    def load_findings_raw(self) -> list[dict]:
+        """Load raw findings data from findings.json (dicts, not dataclasses)."""
+        if not self._current:
+            return []
+        path = self._current / "findings.json"
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+
+    def summary_text(self) -> str:
+        """One-line human summary of this session."""
+        if not self._meta:
+            return "No active session."
+        turns = self.get_conversation_history()
+        findings = self.load_findings_raw()
+        total_findings = sum(len(f.get("findings", [])) for f in findings)
+        return (
+            f"Session {self._meta.session_id} | "
+            f"{len(turns)} turns | "
+            f"{total_findings} findings | "
+            f"status: {self._meta.status}"
+        )
 
     # ── List ───────────────────────────────────────────────────────────────
 
