@@ -30,6 +30,8 @@ pub enum AppMode {
     Analyzing,
     /// Viewing a session report.
     Viewing,
+    /// Awaiting user confirmation for a proposed action.
+    Confirming,
 }
 
 impl std::fmt::Display for AppMode {
@@ -40,8 +42,20 @@ impl std::fmt::Display for AppMode {
             Self::Command => write!(f, "COMMAND"),
             Self::Analyzing => write!(f, "ANALYZING"),
             Self::Viewing => write!(f, "VIEWING"),
+            Self::Confirming => write!(f, "CONFIRM"),
         }
     }
+}
+
+// ── Pending action ─────────────────────────────────────────────────────────
+
+/// A proposed action awaiting user confirmation.
+#[derive(Debug, Clone)]
+pub struct PendingAction {
+    pub action_id: String,
+    pub action_type: String,
+    pub description: String,
+    pub preview: String,
 }
 
 // ── Panel visibility ───────────────────────────────────────────────────────
@@ -97,6 +111,20 @@ pub enum BackgroundEvent {
     AssistantError(String),
     /// Python bridge is ready; carries whether an LLM key is configured.
     BridgeReady { has_llm: bool },
+    /// Python proposed an inline action requiring user confirmation.
+    ProposedAction {
+        action_id: String,
+        action_type: String,
+        description: String,
+        preview: String,
+    },
+    /// Python reports that an action was applied (or failed).
+    ActionApplied {
+        action_id: String,
+        success: bool,
+        message: String,
+        output: String,
+    },
 }
 
 // ── App ────────────────────────────────────────────────────────────────────
@@ -136,6 +164,10 @@ pub struct App {
     pub python_bridge: Option<PythonBridge>,
     /// Whether the LLM is available (set once bridge signals ready).
     pub llm_available: bool,
+    /// Queue of proposed actions awaiting user confirmation.
+    pub pending_actions: Vec<PendingAction>,
+    /// Apply-all flag: skip remaining per-action prompts.
+    pub apply_all: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -169,6 +201,8 @@ impl App {
             streaming_response: None,
             python_bridge: None,
             llm_available: false,
+            pending_actions: Vec::new(),
+            apply_all: false,
         })
     }
 
@@ -278,6 +312,12 @@ impl App {
 
         if self.mode == AppMode::Booting {
             return; // Ignore input during splash
+        }
+
+        // Confirming mode — handle action confirmation keys first
+        if self.mode == AppMode::Confirming {
+            self.handle_confirm_key(key.code);
+            return;
         }
 
         match key.code {
@@ -434,12 +474,113 @@ impl App {
         }
     }
 
+    fn handle_confirm_key(&mut self, code: KeyCode) {
+        match code {
+            // y / Enter — apply current action
+            KeyCode::Char('y') | KeyCode::Enter => {
+                self.apply_next_action();
+            }
+            // n — skip current action
+            KeyCode::Char('n') => {
+                self.skip_next_action();
+            }
+            // a — apply all remaining actions without further prompts
+            KeyCode::Char('a') => {
+                self.apply_all = true;
+                self.apply_next_action();
+            }
+            // q / Esc — skip all remaining actions
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.skip_all_actions();
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_next_action(&mut self) {
+        if let Some(action) = self.pending_actions.first().cloned() {
+            let bridge = match &self.python_bridge {
+                Some(b) => b.clone(),
+                None => {
+                    self.messages.push(Message::error("Bridge not available."));
+                    self.mode = AppMode::Ready;
+                    return;
+                }
+            };
+            let tx = self.bg_tx.clone();
+            let id = action.action_id.clone();
+            self.pending_actions.remove(0);
+            tokio::spawn(async move {
+                if let Err(e) = bridge.apply_action(id).await {
+                    let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                }
+            });
+            // Show next pending action or return to Ready
+            self.show_next_pending_action();
+        }
+    }
+
+    fn skip_next_action(&mut self) {
+        if let Some(action) = self.pending_actions.first().cloned() {
+            let bridge = match &self.python_bridge {
+                Some(b) => b.clone(),
+                None => {
+                    self.pending_actions.clear();
+                    self.mode = AppMode::Ready;
+                    return;
+                }
+            };
+            let id = action.action_id.clone();
+            self.pending_actions.remove(0);
+            let tx = self.bg_tx.clone();
+            tokio::spawn(async move {
+                let _ = bridge.skip_action(id).await;
+                // no event needed — fire and forget
+                drop(tx);
+            });
+            self.messages.push(Message::system("Skipped."));
+            self.show_next_pending_action();
+        }
+    }
+
+    fn skip_all_actions(&mut self) {
+        let bridge = self.python_bridge.clone();
+        let ids: Vec<String> = self.pending_actions.drain(..).map(|a| a.action_id).collect();
+        if let Some(bridge) = bridge {
+            tokio::spawn(async move {
+                for id in ids {
+                    let _ = bridge.skip_action(id).await;
+                }
+            });
+        }
+        self.messages.push(Message::system("Skipped all proposed actions."));
+        self.apply_all = false;
+        self.mode = AppMode::Ready;
+    }
+
+    fn show_next_pending_action(&mut self) {
+        if let Some(next) = self.pending_actions.first() {
+            if self.apply_all {
+                self.apply_next_action();
+            } else {
+                self.messages.push(Message::assistant(format!(
+                    "**[{} — {}]**\n{}\n\n[y] Apply  [n] Skip  [a] Apply all  [q] Skip all",
+                    next.action_type, next.description, next.preview,
+                )));
+                self.mode = AppMode::Confirming;
+            }
+        } else {
+            self.apply_all = false;
+            self.mode = AppMode::Ready;
+        }
+    }
+
     fn handle_slash_command(&mut self, cmd: &str) {
         let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
         match parts[0] {
             "/help" => {
                 self.messages.push(Message::assistant(
-                    "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
+                    "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /act <instruction>  — ask AI to make changes (with diff preview + confirm)\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
                 ));
             }
             "/quit" | "/exit" => {
@@ -464,6 +605,14 @@ impl App {
             "/generate" => {
                 let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
                 self.generate_mission(focus);
+            }
+            "/act" => {
+                let query = parts.get(1).copied().unwrap_or("").trim().to_string();
+                if query.is_empty() {
+                    self.messages.push(Message::error("Usage: /act <instruction>"));
+                } else {
+                    self.send_action_query(query);
+                }
             }
             "/clear" => {
                 self.messages.clear();
@@ -546,6 +695,31 @@ impl App {
                 self.messages.push(Message::error(
                     format!("Unknown session subcommand: '{}'. Use: new, load <id>, summary.", sub[0])
                 ));
+            }
+        }
+    }
+
+    fn send_action_query(&mut self, text: String) {
+        match &self.python_bridge {
+            None => {
+                self.messages.push(Message::system("AI bridge not ready."));
+            }
+            Some(_) if !self.llm_available => {
+                self.messages.push(Message::system(
+                    "No LLM configured — cannot run action query. Add an API key to .env."
+                ));
+            }
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let root = self.project_root.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                self.messages.push(Message::system("Thinking... (action mode)"));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.query_with_actions(text, root).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
             }
         }
     }
@@ -645,6 +819,32 @@ impl App {
                 } else {
                     self.status_text = "AI offline — add API key to .env".to_string();
                 }
+            }
+            BackgroundEvent::ProposedAction { action_id, action_type, description, preview } => {
+                self.pending_actions.push(PendingAction {
+                    action_id,
+                    action_type,
+                    description,
+                    preview,
+                });
+                // If not already in Confirming mode, show the first action
+                if self.mode != AppMode::Confirming {
+                    self.show_next_pending_action();
+                }
+            }
+            BackgroundEvent::ActionApplied { action_id: _, success, message, output } => {
+                if success {
+                    let mut text = format!("Applied: {}", message);
+                    if !output.is_empty() {
+                        text.push('\n');
+                        text.push_str(&output);
+                    }
+                    self.messages.push(Message::system(text));
+                } else {
+                    self.messages.push(Message::error(format!("Action failed: {}", message)));
+                }
+                // Show next pending action (if any)
+                self.show_next_pending_action();
             }
         }
     }

@@ -4,6 +4,7 @@
 //! None of them mutate state — they only read from `App` and draw to `Frame`.
 
 pub mod command_bar;
+pub mod diff;
 pub mod file_panel;
 pub mod layout;
 pub mod session_panel;

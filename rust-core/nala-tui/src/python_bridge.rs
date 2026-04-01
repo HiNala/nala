@@ -60,6 +60,12 @@ pub enum BridgeRequest {
     SessionSummary,
     /// Generate a mission document (optionally with a focus).
     GenerateMission { focus: String },
+    /// Query with inline-action extraction enabled.
+    QueryWithActions { text: String, project_root: PathBuf },
+    /// Apply a previously proposed action.
+    ApplyAction { action_id: String },
+    /// Skip (discard) a proposed action.
+    SkipAction { action_id: String },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -132,6 +138,30 @@ impl PythonBridge {
     pub async fn generate_mission(&self, focus: String) -> Result<()> {
         self.request_tx
             .send(BridgeRequest::GenerateMission { focus })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Send a query with inline-action extraction enabled.
+    pub async fn query_with_actions(&self, text: String, project_root: PathBuf) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::QueryWithActions { text, project_root })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Apply a previously proposed action.
+    pub async fn apply_action(&self, action_id: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::ApplyAction { action_id })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Skip (discard) a proposed action.
+    pub async fn skip_action(&self, action_id: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::SkipAction { action_id })
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -290,6 +320,22 @@ async fn bridge_task(
                                 "type": "generate_mission",
                                 "focus": focus,
                             }),
+                            BridgeRequest::QueryWithActions { text, project_root } => json!({
+                                "id": id,
+                                "type": "query_with_actions",
+                                "text": text,
+                                "project_root": project_root.to_string_lossy(),
+                            }),
+                            BridgeRequest::ApplyAction { action_id } => json!({
+                                "id": id,
+                                "type": "apply_action",
+                                "action_id": action_id,
+                            }),
+                            BridgeRequest::SkipAction { action_id } => json!({
+                                "id": id,
+                                "type": "skip_action",
+                                "action_id": action_id,
+                            }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
                             let _ = bg_tx.send(BackgroundEvent::AssistantError(
@@ -365,6 +411,30 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 .unwrap_or("Unknown error")
                 .to_string();
             let _ = bg_tx.send(BackgroundEvent::AssistantError(text)).await;
+        }
+        "proposed_action" => {
+            let action_id = msg.get("action_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let action_type = msg.get("action_type").and_then(|v| v.as_str()).unwrap_or("edit").to_string();
+            let description = msg.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let preview = msg.get("preview").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let _ = bg_tx.send(BackgroundEvent::ProposedAction {
+                action_id,
+                action_type,
+                description,
+                preview,
+            }).await;
+        }
+        "action_applied" => {
+            let action_id = msg.get("action_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let success = msg.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+            let message = msg.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let output = msg.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let _ = bg_tx.send(BackgroundEvent::ActionApplied {
+                action_id,
+                success,
+                message,
+                output,
+            }).await;
         }
         "sessions" => {
             // Format session list as a text block

@@ -34,6 +34,18 @@ Full protocol (JSON-lines over stdin/stdout):
   Response: (same chunk/done/error pattern — streams the markdown)
 
   ── Housekeeping ──────────────────────────────────────────────────────────
+  ── Inline actions ────────────────────────────────────────────────────────
+  Request:  {"id":"A","type":"query_with_actions","text":"..."}
+  Response: (chunk/done like query, then…)
+            {"id":"A","type":"proposed_action","action_id":"abc","action_type":"edit","description":"…","preview":"…"}
+
+  Request:  {"id":"B","type":"apply_action","action_id":"abc"}
+  Response: {"id":"B","type":"action_applied","action_id":"abc","success":true,"message":"Edited src/foo.py"}
+
+  Request:  {"id":"C","type":"skip_action","action_id":"abc"}
+  Response: {"id":"C","type":"ok"}
+
+  ── Housekeeping ──────────────────────────────────────────────────────────
   Request:  {"id":"8","type":"index_context","total_files":10,"total_symbols":50}
   Response: {"id":"8","type":"ok"}
 
@@ -57,8 +69,14 @@ from typing import Optional
 
 from .config import Config
 from .agents.orchestrator import AgentOrchestrator
+from .agents.action_extractor import extract_actions
+from .agents.action_executor import ActionExecutor
 from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
+
+# Per-process store of proposed actions keyed by action_id.
+# Cleared when a new session starts.
+_pending_actions: dict[str, object] = {}
 
 # Flush immediately — Rust reads line-by-line
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
@@ -186,8 +204,9 @@ async def handle_request(
             sm = SessionManager(root)
             meta = sm.new_session()
             agent.set_session(sm)
-            # Clear in-memory conversation history for the fresh session
+            # Clear in-memory conversation history and pending actions
             agent.context.messages.clear()
+            _pending_actions.clear()
             write_response({
                 "id": req_id,
                 "type": "session_created",
@@ -221,6 +240,75 @@ async def handle_request(
             })
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    # ── Query with inline actions (streaming + action extraction) ─────────
+    elif req_type == "query_with_actions":
+        text = req.get("text", "").strip()
+        if not text:
+            write_response({"id": req_id, "type": "error", "text": "Empty query"})
+            return
+        try:
+            full_text: list[str] = []
+            async for chunk in agent.stream_query_with_actions(text):
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+                full_text.append(chunk)
+            write_response({"id": req_id, "type": "done"})
+
+            # Extract and register proposed actions
+            if full_text:
+                assembled = "".join(full_text)
+                _cleaned, actions = extract_actions(assembled)
+                for action in actions:
+                    _pending_actions[action.action_id] = action
+                    executor = ActionExecutor(root)
+                    preview = executor.preview(action)
+                    write_response({
+                        "id": req_id,
+                        "type": "proposed_action",
+                        "action_id": action.action_id,
+                        "action_type": action.type,
+                        "description": action.description,  # type: ignore[attr-defined]
+                        "preview": preview,
+                    })
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    # ── Apply a proposed action ────────────────────────────────────────────
+    elif req_type == "apply_action":
+        action_id = req.get("action_id", "")
+        action = _pending_actions.get(action_id)
+        if action is None:
+            write_response({"id": req_id, "type": "error", "text": f"Unknown action_id: {action_id}"})
+            return
+        try:
+            executor = ActionExecutor(root)
+            result = executor.apply(action)  # type: ignore[arg-type]
+            # Persist to session audit log
+            session = agent.ensure_session()
+            session.append_turn(
+                "action",
+                json.dumps({
+                    "action_id": result.action_id,
+                    "success": result.success,
+                    "message": result.message,
+                }),
+            )
+            write_response({
+                "id": req_id,
+                "type": "action_applied",
+                "action_id": result.action_id,
+                "success": result.success,
+                "message": result.message,
+                "output": result.output,
+            })
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    # ── Skip a proposed action (acknowledge, no file changes) ─────────────
+    elif req_type == "skip_action":
+        action_id = req.get("action_id", "")
+        _pending_actions.pop(action_id, None)
+        write_response({"id": req_id, "type": "ok"})
 
     # ── Session: summary ──────────────────────────────────────────────────
     elif req_type == "session_summary":

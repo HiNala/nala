@@ -16,8 +16,8 @@
 //!   │ STATUS BAR                                  │
 //!   └─────────────────────────────────────────────┘
 
-use crate::app::App;
-use crate::ui::{command_bar, file_panel, session_panel, status_bar};
+use crate::app::{App, AppMode};
+use crate::ui::{command_bar, diff, file_panel, session_panel, status_bar};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -41,7 +41,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         .split(area);
 
     render_top_bar(frame, app, outer[0]);
-    render_body(frame, app, outer[1]);
+    if app.mode == AppMode::Confirming && !app.pending_actions.is_empty() {
+        diff::render_confirm(frame, app, outer[1]);
+    } else {
+        render_body(frame, app, outer[1]);
+    }
     command_bar::render(frame, app, outer[2]);
     status_bar::render(frame, app, outer[3]);
 }

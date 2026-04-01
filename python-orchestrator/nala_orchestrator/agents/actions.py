@@ -1,43 +1,80 @@
 """
-Inline agent actions — stub for Mission 13.
+Action types for inline agent modifications.
 
-These are operations the agent can perform directly on files:
-refactor a function, fix a bug, apply a suggestion from the audit report.
+Actions are proposed by the LLM, previewed for the user, and only applied
+after explicit confirmation. The XML format embedded in LLM responses is:
 
-All actions require explicit user confirmation before modifying files.
+  <action type="edit" file="src/auth.py">
+  <old>
+  ...exact text to replace...
+  </old>
+  <new>
+  ...replacement text...
+  </new>
+  <description>Human-readable summary</description>
+  </action>
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import uuid
+from dataclasses import dataclass, field
+from typing import Union
 
-if TYPE_CHECKING:
-    from nala_orchestrator.config import Config
+
+@dataclass
+class EditAction:
+    """Replace exact text in an existing file."""
+
+    file_path: str
+    old_content: str
+    new_content: str
+    description: str
+    action_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    type: str = "edit"
 
 
-class AgentActions:
-    """Performs inline code modifications with explicit user confirmation."""
+@dataclass
+class CreateAction:
+    """Write a new file. Refuses to overwrite existing files."""
 
-    def __init__(self, config: "Config") -> None:
-        self.config = config
+    file_path: str
+    content: str
+    description: str
+    action_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    type: str = "create"
 
-    async def refactor_function(
-        self, file_path: str, function_name: str, instruction: str
-    ) -> str:
-        """
-        Refactor a specific function based on an instruction.
 
-        TODO (Mission 13): implement file read → LLM transform → diff preview → confirm → write.
-        """
-        return (
-            f"Inline actions not yet implemented. "
-            f"Planned for Mission 13: would refactor `{function_name}` in `{file_path}`."
-        )
+@dataclass
+class DeleteAction:
+    """Delete an existing file. Always requires explicit confirmation."""
 
-    async def apply_suggestion(self, file_path: str, line: int, suggestion: str) -> str:
-        """
-        Apply a suggestion from the audit report at a specific file/line.
+    file_path: str
+    description: str
+    action_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    type: str = "delete"
 
-        TODO (Mission 13): implement suggestion application with diff preview.
-        """
-        return f"Inline actions not yet implemented (Mission 13)."
+
+@dataclass
+class ShellAction:
+    """Run a shell command sandboxed to the project directory."""
+
+    command: str
+    description: str
+    working_dir: str = "."
+    action_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    type: str = "shell"
+
+
+# Union type for type-checking convenience
+Action = Union[EditAction, CreateAction, DeleteAction, ShellAction]
+
+
+@dataclass
+class ActionResult:
+    """Result of applying an action."""
+
+    action_id: str
+    success: bool
+    message: str = ""
+    output: str = ""

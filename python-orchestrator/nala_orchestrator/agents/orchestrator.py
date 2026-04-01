@@ -46,6 +46,44 @@ When referencing code, always include file paths and line numbers.
 Keep responses focused and actionable. The developer is experienced — skip basics.
 """
 
+# Extra instructions appended when the user explicitly requests actions
+ACTION_PROMPT_EXTENSION = """
+## Inline Actions
+
+When the user asks you to *make a change*, *fix*, *refactor*, or *create* something,
+embed structured action blocks in your response using this exact XML format:
+
+<action type="edit" file="relative/path/to/file.py">
+<old>
+exact existing text to replace (must be verbatim — the executor does a literal string match)
+</old>
+<new>
+replacement text
+</new>
+<description>One-sentence summary of what this change does</description>
+</action>
+
+<action type="create" file="relative/path/to/new_file.py">
+<new>
+full content of the new file
+</new>
+<description>Why this file is being created</description>
+</action>
+
+<action type="shell">
+<command>pip install bcrypt</command>
+<description>Install required dependency</description>
+</action>
+
+Rules for inline actions:
+- Only emit actions when the user explicitly asks for a change to be made
+- Use exact verbatim text for <old> — never paraphrase or reformat
+- Explain your reasoning in plain text BEFORE the action block
+- One action block per logical change; do not batch unrelated changes
+- Never emit a delete action unless the user explicitly asks to remove a file
+- After your action blocks, tell the user what they should verify once applied
+"""
+
 
 @dataclass
 class ConversationContext:
@@ -163,6 +201,43 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error("LLM query failed: %s", e)
             return f"Error: {e}"
+
+    async def stream_query_with_actions(self, user_message: str) -> AsyncIterator[str]:
+        """
+        Like stream_query but injects action-format instructions into the system
+        prompt. The caller is responsible for extracting action blocks from the
+        assembled response.
+        """
+        if not self.config.has_llm():
+            yield (
+                "No LLM provider configured. "
+                "Add your API key to .env and restart Nala.\n"
+            )
+            return
+
+        session = self.ensure_session()
+        self.context.add_user(user_message)
+        self.context.trim_to_limit()
+        session.append_turn("user", user_message)
+
+        action_system = self.build_system_prompt() + ACTION_PROMPT_EXTENSION
+        full_response: list[str] = []
+        try:
+            provider = self._get_provider()
+            async for chunk in provider.stream_chat(
+                messages=self.context.messages,
+                system_prompt=action_system,
+            ):
+                full_response.append(chunk)
+                yield chunk
+        except Exception as e:
+            logger.error("LLM streaming failed: %s", e)
+            yield f"\n\nError: {e}"
+
+        if full_response:
+            assembled = "".join(full_response)
+            self.context.add_assistant(assembled)
+            session.append_turn("assistant", assembled)
 
     async def stream_query(self, user_message: str) -> AsyncIterator[str]:
         """Stream a response token by token."""
