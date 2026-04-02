@@ -94,17 +94,60 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(theme::GRAY),
     )));
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Getting started",
-        Style::default()
-            .fg(theme::GREEN)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(tip_line("  1. ", "Ask questions or give instructions"));
-    lines.push(tip_line("  2. ", "/analyze to run code analysis"));
-    lines.push(tip_line("  3. ", "/help for all commands"));
-    lines.push(tip_line("  4. ", "/scope path/ to focus on a dir"));
+    if let Some(intel) = &app.startup_intel {
+        if !intel.project_types.is_empty() {
+            let types = intel.project_types.join(", ");
+            lines.push(Line::from(Span::styled(
+                format!("  Project: {}", types),
+                Style::default().fg(theme::CYAN),
+            )));
+        }
+
+        if !intel.git_branch.is_empty() {
+            let mut git_line = format!("  git: {}", intel.git_branch);
+            if intel.git_uncommitted > 0 {
+                git_line.push_str(&format!("  ({} uncommitted)", intel.git_uncommitted));
+            }
+            if intel.git_ahead > 0 {
+                git_line.push_str(&format!("  {} ahead", intel.git_ahead));
+            }
+            if intel.git_behind > 0 {
+                git_line.push_str(&format!("  {} behind", intel.git_behind));
+            }
+            lines.push(Line::from(Span::styled(
+                git_line,
+                Style::default().fg(theme::GREEN),
+            )));
+        }
+
+        if !intel.suggestions.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Suggested next steps",
+                Style::default()
+                    .fg(theme::GREEN)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for suggestion in &intel.suggestions {
+                lines.push(Line::from(Span::styled(
+                    format!("  · {}", suggestion),
+                    Style::default().fg(theme::WHITE),
+                )));
+            }
+        }
+    } else {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Getting started",
+            Style::default()
+                .fg(theme::GREEN)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(tip_line("  1. ", "Ask questions or give instructions"));
+        lines.push(tip_line("  2. ", "/analyze to run code analysis"));
+        lines.push(tip_line("  3. ", "/help for all commands"));
+        lines.push(tip_line("  4. ", "/scope path/ to focus on a dir"));
+    }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

@@ -89,6 +89,7 @@ from .agents.orchestrator import AgentOrchestrator
 from .chunking.embedder import Embedder
 from .chunking.splitter import ChunkSplitter, Symbol
 from .config import Config
+from .git_ops import branch_info, diff_summary, full_status
 from .handoff.reader import HandoffReader
 from .handoff.writer import HandoffWriter
 from .memory.knowledge import KnowledgeBase
@@ -98,6 +99,8 @@ from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
 from .sessions.missions import MissionDocument, MissionGenerator
 from .sessions.report import AuditReport, Finding, ReportGenerator
+from .startup import gather_startup_intelligence
+from .tasks.ledger import TaskLedger
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("NALA_DEBUG") else logging.WARNING,
@@ -111,6 +114,9 @@ _action_executor: ActionExecutor | None = None
 
 # Project-level embedder (built lazily on first index_context with symbols).
 _embedder: Embedder | None = None
+
+# Task ledger — created on IPC startup, persists within the session.
+_task_ledger: TaskLedger | None = None
 
 # Singleton lead agent — created on first team_start, reused for status/cancel.
 _lead_agent: LeadAgent | None = None
@@ -770,6 +776,82 @@ async def handle_request(
         _lead_agent = None
         write_response({"id": req_id, "type": "ok", "text": "Team cancelled."})
 
+    # ── Git operations ────────────────────────────────────────────────────
+    elif req_type == "git_diff":
+        try:
+            text = diff_summary(root)
+            _stream_text(req_id, text)
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Git error: {e}"})
+
+    elif req_type == "git_branch":
+        try:
+            text = branch_info(root)
+            _stream_text(req_id, text)
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Git error: {e}"})
+
+    elif req_type == "git_status":
+        try:
+            text = full_status(root)
+            _stream_text(req_id, text)
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Git error: {e}"})
+
+    # ── Task ledger ─────────────────────────────────────────────────────
+    elif req_type == "task_create":
+        global _task_ledger
+        objective = req.get("objective", "").strip()
+        if not objective:
+            write_response({"id": req_id, "type": "error", "text": "Missing task objective"})
+            return
+        if _task_ledger is None:
+            sessions_dir = root / ".nala" / "sessions"
+            _task_ledger = TaskLedger(sessions_dir)
+        task = _task_ledger.create_task(objective)
+        msg = f"Created task [{task.task_id}]: {task.objective}\nStatus: {task.status.value}"
+        _stream_text(req_id, msg)
+
+    elif req_type == "task_status":
+        if _task_ledger is None:
+            _stream_text(req_id, "No active task. Use /task <objective> to start one.")
+        else:
+            _stream_text(req_id, _task_ledger.status_text())
+
+    elif req_type == "task_list":
+        if _task_ledger is None or not _task_ledger.list_tasks():
+            _stream_text(req_id, "No tasks in this session.")
+        else:
+            lines = []
+            for t in _task_ledger.list_tasks():
+                lines.append(f"[{t.task_id}] {t.status.value:12s}  {t.objective}")
+            _stream_text(req_id, "\n".join(lines))
+
+    elif req_type == "task_done":
+        if _task_ledger is None:
+            _stream_text(req_id, "No active task.")
+        else:
+            summary = req.get("summary", "")
+            task = _task_ledger.complete_current(summary)
+            if task:
+                _stream_text(req_id, f"Completed task [{task.task_id}]: {task.objective}")
+            else:
+                _stream_text(req_id, "No active task to complete.")
+
+    # ── Startup intelligence (on-demand refresh) ────────────────────────
+    elif req_type == "startup_intelligence":
+        try:
+            intel = gather_startup_intelligence(
+                root,
+                file_count=req.get("file_count", 0),
+                symbol_count=req.get("symbol_count", 0),
+            )
+            intel["id"] = req_id
+            write_response(intel)
+        except Exception as e:
+            err = f"Startup intelligence error: {e}"
+            write_response({"id": req_id, "type": "error", "text": err})
+
     else:
         write_response({"id": req_id, "type": "error", "text": f"Unknown type: {req_type}"})
 
@@ -885,6 +967,11 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
     if kb_ctx:
         agent.context.inject_system(f"[PROJECT KNOWLEDGE]\n{kb_ctx}\n[END KNOWLEDGE]")
 
+    # Initialise the task ledger for this session.
+    global _task_ledger
+    sessions_dir = root / ".nala" / "sessions"
+    _task_ledger = TaskLedger(sessions_dir)
+
     # Signal ready
     write_response({
         "type": "ready",
@@ -893,6 +980,13 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
         "model": config.active_model(),
         "version": VERSION,
     })
+
+    # Send proactive startup intelligence immediately after ready.
+    try:
+        intel = gather_startup_intelligence(root)
+        write_response(intel)
+    except Exception:
+        log.debug("Startup intelligence gathering failed", exc_info=True)
 
     while True:
         try:

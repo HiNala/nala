@@ -100,6 +100,20 @@ pub enum BridgeRequest {
         total_symbols: usize,
         symbols: Vec<nala_indexer::Symbol>,
     },
+    /// Git diff summary.
+    GitDiff,
+    /// Git branch info.
+    GitBranch,
+    /// Git combined status.
+    GitStatus,
+    /// Create a new task.
+    TaskCreate { objective: String },
+    /// Get current task status.
+    TaskStatus,
+    /// List all session tasks.
+    TaskList,
+    /// Complete current task.
+    TaskDone { summary: String },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -316,6 +330,48 @@ impl PythonBridge {
         self.request_tx
             .send(BridgeRequest::MemoryForget { target })
             .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Request git diff summary.
+    pub async fn git_diff(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::GitDiff).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Request git branch info.
+    pub async fn git_branch(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::GitBranch).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Request git status overview.
+    pub async fn git_status(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::GitStatus).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Create a new task with an objective.
+    pub async fn task_create(&self, objective: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::TaskCreate { objective }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Get current task status.
+    pub async fn task_status(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::TaskStatus).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// List all tasks in the session.
+    pub async fn task_list(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::TaskList).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Complete the current task.
+    pub async fn task_done(&self, summary: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::TaskDone { summary }).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -579,6 +635,36 @@ async fn bridge_task(
                                 "total_files": total_files,
                                 "total_symbols": total_symbols,
                                 "symbols": symbols,
+                            }),
+                            BridgeRequest::GitDiff => json!({
+                                "id": id,
+                                "type": "git_diff",
+                            }),
+                            BridgeRequest::GitBranch => json!({
+                                "id": id,
+                                "type": "git_branch",
+                            }),
+                            BridgeRequest::GitStatus => json!({
+                                "id": id,
+                                "type": "git_status",
+                            }),
+                            BridgeRequest::TaskCreate { objective } => json!({
+                                "id": id,
+                                "type": "task_create",
+                                "objective": objective,
+                            }),
+                            BridgeRequest::TaskStatus => json!({
+                                "id": id,
+                                "type": "task_status",
+                            }),
+                            BridgeRequest::TaskList => json!({
+                                "id": id,
+                                "type": "task_list",
+                            }),
+                            BridgeRequest::TaskDone { summary } => json!({
+                                "id": id,
+                                "type": "task_done",
+                                "summary": summary,
                             }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
@@ -882,6 +968,36 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 .to_string();
             let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
             let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        "startup_intelligence" => {
+            let project_types: Vec<String> = msg.get("project_types")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let entry_points: Vec<String> = msg.get("entry_points")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let git = msg.get("git").cloned().unwrap_or(Value::Null);
+            let git_branch = git.get("branch").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let git_uncommitted = git.get("uncommitted").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let git_ahead = git.get("ahead").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let git_behind = git.get("behind").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let has_sessions = msg.get("has_sessions").and_then(|v| v.as_bool()).unwrap_or(false);
+            let suggestions: Vec<String> = msg.get("suggestions")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let _ = bg_tx.send(BackgroundEvent::StartupIntelligence {
+                project_types,
+                entry_points,
+                git_branch,
+                git_uncommitted,
+                git_ahead,
+                git_behind,
+                has_sessions,
+                suggestions,
+            }).await;
         }
         // "pong", "ready" — informational, no UI event needed
         _ => {}

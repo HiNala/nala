@@ -21,6 +21,12 @@ Then execute missions in order. Each mission is self-contained with objectives, 
 | MISSION_11_12_13_14_missions_llm_agents_dashboard.md | 11-14 | Mission auto-gen, LLM integration, agent actions, web dashboard |
 | MISSION_15_16_polish_roadmap.md | 15-16 | Review/polish/harden, future roadmap |
 | MISSION_17_18_19_architecture_docs.md | 17-19 | System architecture, data flow, extension points documentation |
+| MISSION_20_context_window_management.md | 20 | Token tracking, auto-compaction, context window controls |
+| MISSION_21_hierarchical_memory.md | 21 | Short-term, session, and knowledge-base memory layers |
+| MISSION_22_session_handoff.md | 22 | Structured handoff documents for session continuity |
+| MISSION_23_multi_agent_orchestration.md | 23 | Multi-agent team coordination with task decomposition |
+| MISSION_24_context_compression.md | 24 | Advanced compression pipeline for context efficiency |
+| MISSION_25_objective_driven_agent.md | 25 | Proactive startup, git awareness, task ledger, action pipeline |
 
 ## Execution Order
 
@@ -33,6 +39,10 @@ Then execute missions in order. Each mission is self-contained with objectives, 
 **Phase 4 - Quality (Missions 15-16)**: Polish everything. After these missions, Nala is production-ready and has a clear roadmap.
 
 **Phase 5 - Documentation (Missions 17-19)**: Document the architecture for maintainability and extensibility. After these missions, any engineer or AI agent can understand and extend Nala.
+
+**Phase 5B - Context & Memory (Missions 20-24)**: Add intelligent context management, hierarchical memory, session handoffs, multi-agent coordination, and compression. After these missions, Nala maintains deep continuity across sessions.
+
+**Phase 6 - Objective-Driven Agent (Mission 25+)**: Transform Nala from a chat tool into a goal-oriented coding agent with proactive startup, git awareness, task tracking, and safe action pipelines.
 
 ## Tech Stack Quick Reference
 

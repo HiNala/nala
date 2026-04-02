@@ -114,6 +114,24 @@ impl App {
             "/clear" => {
                 self.messages.clear();
             }
+            "/diff" => self.git_diff(),
+            "/branch" => self.git_branch(),
+            "/status" => self.git_status(),
+            "/task" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                match args {
+                    "" | "status" => self.task_status(),
+                    "list" => self.task_list(),
+                    "done" => self.task_done(String::new()),
+                    _ => {
+                        if args.starts_with("done ") {
+                            self.task_done(args.strip_prefix("done ").unwrap_or("").to_string());
+                        } else {
+                            self.task_create(args.to_string());
+                        }
+                    }
+                }
+            }
             _ => {
                 self.push_message(Message::error(format!(
                     "Unknown command: {}. Type /help.",
@@ -165,6 +183,13 @@ impl App {
             "  /diag                  — show LSP diagnostics summary\n",
             "  /diag errors           — show only errors\n",
             "  /diag warnings         — show only warnings\n",
+            "  /diff                  — show uncommitted git changes\n",
+            "  /branch                — show branch info and recent commits\n",
+            "  /status                — combined git status overview\n",
+            "  /task <objective>      — create a new task for the agent to track\n",
+            "  /task status           — show current task state\n",
+            "  /task list             — list all tasks in this session\n",
+            "  /task done [summary]   — mark current task complete\n",
             "  /doctor                — environment and readiness diagnostics\n",
             "  /clear                 — clear message log\n",
             "  /help                  — show this help\n",
@@ -895,6 +920,104 @@ impl App {
                 let _ = tx
                     .send(BackgroundEvent::AssistantError(e.to_string()))
                     .await;
+            }
+        });
+    }
+
+    // ── Git commands ───────────────────────────────────────────────────
+
+    fn git_diff(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.push_message(Message::system("Fetching diff..."));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.git_diff().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+    }
+
+    fn git_branch(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.push_message(Message::system("Fetching branch info..."));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.git_branch().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+    }
+
+    fn git_status(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.push_message(Message::system("Fetching git status..."));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.git_status().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+    }
+
+    // ── Task commands ──────────────────────────────────────────────────
+
+    fn task_create(&mut self, objective: String) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.task_create(objective).await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+    }
+
+    fn task_status(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.task_status().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+    }
+
+    fn task_list(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.task_list().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+    }
+
+    fn task_done(&mut self, summary: String) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.task_done(summary).await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
             }
         });
     }

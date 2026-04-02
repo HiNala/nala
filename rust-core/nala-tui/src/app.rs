@@ -154,6 +154,16 @@ pub enum BackgroundEvent {
         server_name: String,
     },
     LspStartFailed(String),
+    StartupIntelligence {
+        project_types: Vec<String>,
+        entry_points: Vec<String>,
+        git_branch: String,
+        git_uncommitted: usize,
+        git_ahead: usize,
+        git_behind: usize,
+        has_sessions: bool,
+        suggestions: Vec<String>,
+    },
 }
 
 // ── App ────────────────────────────────────────────────────────────────────
@@ -196,6 +206,19 @@ pub struct App {
     pub dashboard_default_port: u16,
     pub has_index_snapshot: bool,
     pub last_index_symbol_payload: Vec<nala_indexer::Symbol>,
+    pub startup_intel: Option<StartupIntel>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StartupIntel {
+    pub project_types: Vec<String>,
+    pub entry_points: Vec<String>,
+    pub git_branch: String,
+    pub git_uncommitted: usize,
+    pub git_ahead: usize,
+    pub git_behind: usize,
+    pub has_sessions: bool,
+    pub suggestions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -314,6 +337,7 @@ impl App {
             dashboard_default_port,
             has_index_snapshot: false,
             last_index_symbol_payload: Vec::new(),
+            startup_intel: None,
         })
     }
 
@@ -818,6 +842,27 @@ impl App {
             BackgroundEvent::LspStartFailed(reason) => {
                 self.push_message(Message::system(format!("LSP: not available — {}", reason)));
             }
+            BackgroundEvent::StartupIntelligence {
+                project_types,
+                entry_points,
+                git_branch,
+                git_uncommitted,
+                git_ahead,
+                git_behind,
+                has_sessions,
+                suggestions,
+            } => {
+                self.startup_intel = Some(StartupIntel {
+                    project_types,
+                    entry_points,
+                    git_branch,
+                    git_uncommitted,
+                    git_ahead,
+                    git_behind,
+                    has_sessions,
+                    suggestions,
+                });
+            }
         }
     }
 
@@ -921,6 +966,13 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/handoff",
     "/handoff save",
     "/handoff history",
+    "/diff",
+    "/branch",
+    "/status",
+    "/task",
+    "/task status",
+    "/task list",
+    "/task done",
     "/clear",
     "/quit",
 ];
