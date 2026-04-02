@@ -248,11 +248,6 @@ impl App {
                     "AI bridge is starting up — please wait a moment and try again.",
                 ));
             }
-            Some(_) if !self.llm_available => {
-                self.push_message(Message::system(
-                    "No LLM API key found. Add one of these to your .env file and restart:\n  ANTHROPIC_API_KEY=sk-...\n  OPENAI_API_KEY=sk-...\n  GOOGLE_API_KEY=...",
-                ));
-            }
             Some(bridge) => {
                 let bridge = bridge.clone();
                 let root = self.project_root.clone();
@@ -273,11 +268,6 @@ impl App {
         match &self.python_bridge {
             None => {
                 self.push_message(Message::system("AI bridge not ready."));
-            }
-            Some(_) if !self.llm_available => {
-                self.push_message(Message::system(
-                    "No LLM configured — cannot run action query. Add an API key to .env.",
-                ));
             }
             Some(bridge) => {
                 let bridge = bridge.clone();
