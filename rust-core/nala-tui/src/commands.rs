@@ -18,14 +18,14 @@ impl App {
             }
             "/scan" => {
                 self.push_message(Message::system(
-                    "Scanning project files (hash-only, no parsing)..."
+                    "Scanning project files (hash-only, no parsing)...",
                 ));
                 self.index_progress = Some(0.2);
                 self.start_background_scan();
             }
             "/index" => {
                 self.push_message(Message::system(
-                    "Indexing project (parse + symbols + metrics)..."
+                    "Indexing project (parse + symbols + metrics)...",
                 ));
                 self.index_progress = Some(0.2);
                 self.start_background_index();
@@ -435,7 +435,7 @@ impl App {
 
     fn handle_dashboard_command(&mut self, args: &str) {
         match args {
-            "" | "start" => self.start_dashboard(3000),
+            "" | "start" => self.start_dashboard(self.dashboard_default_port),
             "stop" => self.stop_dashboard(),
             "status" => self.show_dashboard_status(),
             other => {
@@ -518,7 +518,11 @@ impl App {
             return;
         };
 
-        let root_for_env = self.project_root.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+        let root_for_env = self
+            .project_root
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_string();
         let mut last_error = None;
         for python_cmd in dashboard_python_candidates(&repo_root) {
             let mut cmd = Command::new(&python_cmd);
@@ -578,7 +582,10 @@ impl App {
         if let Some(mut child) = self.dashboard_process.take() {
             let _ = child.kill();
             let _ = child.wait();
-            let port = self.dashboard_port.take().unwrap_or(3000);
+            let port = self
+                .dashboard_port
+                .take()
+                .unwrap_or(self.dashboard_default_port);
             self.push_message(Message::system(format!(
                 "Dashboard stopped (port {}).",
                 port
@@ -590,7 +597,7 @@ impl App {
 
     fn show_dashboard_status(&mut self) {
         if self.dashboard_is_running() {
-            let port = self.dashboard_port.unwrap_or(3000);
+            let port = self.dashboard_port.unwrap_or(self.dashboard_default_port);
             self.push_message(Message::assistant(format!(
                 "Dashboard is running at http://127.0.0.1:{}",
                 port
@@ -633,9 +640,9 @@ impl App {
 
     pub(crate) fn doctor(&mut self) {
         let llm_status = if self.llm_available {
-            "ready"
+            "configured"
         } else {
-            "missing API key"
+            "not configured"
         };
         let bridge = if self.python_bridge.is_some() {
             "connected"
@@ -668,10 +675,11 @@ impl App {
              \x20 Analysis scope:  {}\n\
              \x20 Python bridge:   {}\n\
              \x20 LLM provider:    {}\n\
-             \x20 LLM status:      {}\n\
+             \x20 LLM config:      {}\n\
              \x20 LSP:             {}\n\
              \x20 Indexed files:   {}\n\
-             \x20 Indexed symbols: {}",
+             \x20 Indexed symbols: {}\n\
+             \x20 Dashboard port:  {}",
             self.project_root.display(),
             scope,
             bridge,
@@ -679,7 +687,8 @@ impl App {
             llm_status,
             lsp_status,
             self.stats.total_files,
-            self.stats.total_functions
+            self.stats.total_functions,
+            self.dashboard_default_port
         );
         self.push_message(Message::assistant(text));
     }
@@ -706,7 +715,10 @@ impl App {
             _ => None,
         };
 
-        let mut lines = vec![format!("LSP Diagnostics: {} errors, {} warnings", errors, warnings)];
+        let mut lines = vec![format!(
+            "LSP Diagnostics: {} errors, {} warnings",
+            errors, warnings
+        )];
         lines.push(String::new());
 
         let store = &self.diagnostics_store;
@@ -843,7 +855,9 @@ impl App {
                 self.push_message(Message::system("Fetching memory summary..."));
                 tokio::spawn(async move {
                     if let Err(e) = bridge.memory_summary().await {
-                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
                     }
                 });
             }
@@ -851,22 +865,24 @@ impl App {
                 self.push_message(Message::system("Listing memory sessions..."));
                 tokio::spawn(async move {
                     if let Err(e) = bridge.memory_sessions().await {
-                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
                     }
                 });
             }
             "forget" => {
                 let target = sub.get(1).copied().unwrap_or("").trim().to_string();
                 if target.is_empty() {
-                    self.push_message(Message::error(
-                        "Usage: /memory forget <all|session_id>",
-                    ));
+                    self.push_message(Message::error("Usage: /memory forget <all|session_id>"));
                     return;
                 }
                 self.push_message(Message::system(format!("Forgetting: {}...", target)));
                 tokio::spawn(async move {
                     if let Err(e) = bridge.memory_forget(target).await {
-                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
                     }
                 });
             }

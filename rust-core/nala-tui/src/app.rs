@@ -79,16 +79,28 @@ pub struct Message {
 
 impl Message {
     pub fn user(text: impl Into<String>) -> Self {
-        Self { kind: MessageKind::User, text: text.into() }
+        Self {
+            kind: MessageKind::User,
+            text: text.into(),
+        }
     }
     pub fn assistant(text: impl Into<String>) -> Self {
-        Self { kind: MessageKind::Assistant, text: text.into() }
+        Self {
+            kind: MessageKind::Assistant,
+            text: text.into(),
+        }
     }
     pub fn system(text: impl Into<String>) -> Self {
-        Self { kind: MessageKind::System, text: text.into() }
+        Self {
+            kind: MessageKind::System,
+            text: text.into(),
+        }
     }
     pub fn error(text: impl Into<String>) -> Self {
-        Self { kind: MessageKind::Error, text: text.into() }
+        Self {
+            kind: MessageKind::Error,
+            text: text.into(),
+        }
     }
 }
 
@@ -181,6 +193,9 @@ pub struct App {
     pub tab_index: Option<usize>,
     pub dashboard_process: Option<Child>,
     pub dashboard_port: Option<u16>,
+    pub dashboard_default_port: u16,
+    pub has_index_snapshot: bool,
+    pub last_index_symbol_payload: Vec<nala_indexer::Symbol>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -192,12 +207,75 @@ pub struct ProjectStats {
 
 const MAX_MESSAGES: usize = 1_000;
 
+fn load_dashboard_default_port(project_root: &Path) -> u16 {
+    const DEFAULT_PORT: u16 = 3000;
+
+    if let Ok(raw) = std::env::var("DASHBOARD_PORT") {
+        if let Ok(port) = raw.trim().parse::<u16>() {
+            return port;
+        }
+    }
+
+    let env_path = project_root.join(".env");
+    let Ok(contents) = std::fs::read_to_string(env_path) else {
+        return DEFAULT_PORT;
+    };
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "DASHBOARD_PORT" {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        if let Ok(port) = value.parse::<u16>() {
+            return port;
+        }
+    }
+
+    DEFAULT_PORT
+}
+
+fn assistant_error_message(error: &str) -> String {
+    let trimmed = error.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let is_auth_issue = [
+        "api key",
+        "authentication",
+        "unauthorized",
+        "invalid_api_key",
+        "invalid api key",
+        "missing api key",
+        "incorrect api key",
+        "forbidden",
+        "401",
+        "403",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+
+    if is_auth_issue {
+        format!(
+            "AI request failed: {}. Check the active provider and API key in your project .env, then retry.",
+            trimmed
+        )
+    } else {
+        format!("AI request failed: {}", trimmed)
+    }
+}
+
 impl App {
     pub fn new(project_root: &Path) -> Result<Self> {
         let (tx, rx) = mpsc::channel(256);
         let canonical_root = project_root
             .canonicalize()
             .unwrap_or_else(|_| project_root.to_path_buf());
+        let dashboard_default_port = load_dashboard_default_port(&canonical_root);
         Ok(Self {
             project_root: canonical_root,
             mode: AppMode::Booting,
@@ -233,6 +311,9 @@ impl App {
             tab_index: None,
             dashboard_process: None,
             dashboard_port: None,
+            dashboard_default_port,
+            has_index_snapshot: false,
+            last_index_symbol_payload: Vec::new(),
         })
     }
 
@@ -391,7 +472,9 @@ impl App {
             }
             Delete => {
                 self.tab_index = None;
-                if self.cursor_pos < self.input.len() && self.input.is_char_boundary(self.cursor_pos) {
+                if self.cursor_pos < self.input.len()
+                    && self.input.is_char_boundary(self.cursor_pos)
+                {
                     self.input.remove(self.cursor_pos);
                 }
             }
@@ -487,10 +570,8 @@ impl App {
         let root = self.project_root.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                nala_indexer::scan_project(&root)
-            })
-            .await;
+            let result =
+                tokio::task::spawn_blocking(move || nala_indexer::scan_project(&root)).await;
 
             match result {
                 Ok(Ok(scan)) => {
@@ -509,7 +590,10 @@ impl App {
                 }
                 Err(e) => {
                     let _ = tx
-                        .send(BackgroundEvent::IndexError(format!("Scan task panicked: {}", e)))
+                        .send(BackgroundEvent::IndexError(format!(
+                            "Scan task panicked: {}",
+                            e
+                        )))
                         .await;
                 }
             }
@@ -520,10 +604,8 @@ impl App {
         let root = self.project_root.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                nala_indexer::index_project(&root)
-            })
-            .await;
+            let result =
+                tokio::task::spawn_blocking(move || nala_indexer::index_project(&root)).await;
 
             match result {
                 Ok(Ok(index_result)) => {
@@ -541,7 +623,10 @@ impl App {
                 }
                 Err(e) => {
                     let _ = tx
-                        .send(BackgroundEvent::IndexError(format!("Index task panicked: {}", e)))
+                        .send(BackgroundEvent::IndexError(format!(
+                            "Index task panicked: {}",
+                            e
+                        )))
                         .await;
                 }
             }
@@ -578,6 +663,8 @@ impl App {
                 crate::ui::file_panel::invalidate_cache();
                 self.stats.total_files = total_files;
                 self.stats.total_functions = symbols;
+                self.has_index_snapshot = true;
+                self.last_index_symbol_payload = symbol_payload.clone();
                 self.status_text = format!(
                     "{} files in project • {} files reindexed • {} symbols",
                     total_files, indexed_files, symbols
@@ -609,7 +696,8 @@ impl App {
             BackgroundEvent::IndexError(e) => {
                 self.index_progress = None;
                 self.push_message(Message::error(format!(
-                    "Indexing failed: {}. Try running /scan first or check file permissions.", e
+                    "Indexing failed: {}. Try running /scan first or check file permissions.",
+                    e
                 )));
             }
             BackgroundEvent::AssistantChunk(chunk) => {
@@ -633,9 +721,7 @@ impl App {
                         self.push_message(Message::assistant(partial));
                     }
                 }
-                self.push_message(Message::error(format!(
-                    "AI request failed: {}. Check your API key in .env and try again.", e
-                )));
+                self.push_message(Message::error(assistant_error_message(&e)));
             }
             BackgroundEvent::SessionReplaced { text } => {
                 self.mode = AppMode::Ready;
@@ -655,7 +741,11 @@ impl App {
                 self.context_total_tokens = total_tokens;
                 self.context_effective_limit = effective_limit;
             }
-            BackgroundEvent::BridgeReady { has_llm, provider, model } => {
+            BackgroundEvent::BridgeReady {
+                has_llm,
+                provider,
+                model,
+            } => {
                 self.llm_available = has_llm;
                 self.llm_provider = provider;
                 self.llm_model = model;
@@ -664,14 +754,15 @@ impl App {
                 } else {
                     self.status_text = "AI offline — add API key to .env".to_string();
                 }
-                if self.stats.total_files > 0 {
+                if self.has_index_snapshot {
                     if let Some(bridge) = &self.python_bridge {
                         let bridge = bridge.clone();
                         let total_files = self.stats.total_files;
                         let total_symbols = self.stats.total_functions;
+                        let symbol_payload = self.last_index_symbol_payload.clone();
                         tokio::spawn(async move {
                             let _ = bridge
-                                .index_context(total_files, total_symbols, Vec::new())
+                                .index_context(total_files, total_symbols, symbol_payload)
                                 .await;
                         });
                     }
@@ -710,7 +801,8 @@ impl App {
                     self.push_message(Message::system(text));
                 } else {
                     self.push_message(Message::error(format!(
-                        "Action failed: {}. The action has been discarded.", message
+                        "Action failed: {}. The action has been discarded.",
+                        message
                     )));
                 }
                 self.show_next_pending_action();
@@ -724,10 +816,7 @@ impl App {
                 )));
             }
             BackgroundEvent::LspStartFailed(reason) => {
-                self.push_message(Message::system(format!(
-                    "LSP: not available — {}",
-                    reason
-                )));
+                self.push_message(Message::system(format!("LSP: not available — {}", reason)));
             }
         }
     }
@@ -755,15 +844,14 @@ impl App {
             }
             if !handle.is_initialized().await {
                 let _ = tx
-                    .send(BackgroundEvent::LspStartFailed(
-                        format!("{} failed to initialize", server_name),
-                    ))
+                    .send(BackgroundEvent::LspStartFailed(format!(
+                        "{} failed to initialize",
+                        server_name
+                    )))
                     .await;
                 return;
             }
-            let _ = tx
-                .send(BackgroundEvent::LspStarted { server_name })
-                .await;
+            let _ = tx.send(BackgroundEvent::LspStarted { server_name }).await;
 
             let _ = tx.closed().await;
             let _ = handle.shutdown().await;
@@ -804,14 +892,37 @@ impl App {
 // ── Slash-command names for tab completion ──────────────────────────────────
 
 pub const SLASH_COMMANDS: &[&str] = &[
-    "/help", "/scan", "/index", "/analyze", "/scope", "/lsp status",
-    "/def", "/refs", "/hover", "/diag", "/doctor", "/act",
-    "/memory", "/memory sessions", "/memory forget",
-    "/session", "/session new", "/session load", "/session summary",
-    "/generate", "/context", "/compact", "/graph",
-    "/team", "/team status", "/team cancel",
-    "/handoff", "/handoff save", "/handoff history",
-    "/clear", "/quit",
+    "/help",
+    "/scan",
+    "/index",
+    "/analyze",
+    "/scope",
+    "/lsp status",
+    "/def",
+    "/refs",
+    "/hover",
+    "/diag",
+    "/doctor",
+    "/act",
+    "/memory",
+    "/memory sessions",
+    "/memory forget",
+    "/session",
+    "/session new",
+    "/session load",
+    "/session summary",
+    "/generate",
+    "/context",
+    "/compact",
+    "/graph",
+    "/team",
+    "/team status",
+    "/team cancel",
+    "/handoff",
+    "/handoff save",
+    "/handoff history",
+    "/clear",
+    "/quit",
 ];
 
 impl App {

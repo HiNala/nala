@@ -40,3 +40,27 @@ def test_shared_action_executor_persists_across_calls(tmp_path: Path) -> None:
     assert result.success
     assert first is second
     assert second._applied == 1
+
+
+def test_project_env_overrides_home_env(monkeypatch, tmp_path: Path) -> None:
+    home_dir = tmp_path / "fake-home"
+    home_nala = home_dir / ".nala"
+    home_nala.mkdir(parents=True)
+    (home_nala / ".env").write_text(
+        "LLM_PROVIDER=anthropic\nOPENAI_API_KEY=home-key\nDASHBOARD_PORT=9000\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "LLM_PROVIDER=openai\nOPENAI_API_KEY=project-key\nDASHBOARD_PORT=4567\n",
+        encoding="utf-8",
+    )
+
+    for key in ("LLM_PROVIDER", "OPENAI_API_KEY", "DASHBOARD_PORT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(Path, "home", lambda: home_dir)
+
+    config = Config.load(project_root=tmp_path)
+
+    assert config.llm_provider == "openai"
+    assert config.openai_api_key == "project-key"
+    assert config.dashboard_port == 4567

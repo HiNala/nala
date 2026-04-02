@@ -71,9 +71,11 @@ fn render_body(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let main_area = cols[col_idx];
-    let has_conversation = app.messages.iter().any(|m| {
-        matches!(m.kind, MessageKind::User | MessageKind::Assistant)
-    }) || app.streaming_response.is_some();
+    let has_conversation = app
+        .messages
+        .iter()
+        .any(|m| matches!(m.kind, MessageKind::User | MessageKind::Assistant))
+        || app.streaming_response.is_some();
 
     if has_conversation {
         render_messages(frame, app, main_area);
@@ -117,11 +119,18 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             }
             MessageKind::Assistant => {
                 lines.push(Line::from(""));
-                for text_line in msg.text.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {}", text_line),
-                        Style::default().fg(theme::CYAN),
-                    )));
+                let mut assistant_lines = msg.text.lines();
+                if let Some(first_line) = assistant_lines.next() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ai ", theme::bold_accent()),
+                        Span::styled(first_line, Style::default()),
+                    ]));
+                }
+                for text_line in assistant_lines {
+                    lines.push(Line::from(vec![
+                        Span::styled("     ", Style::default().fg(theme::DARK_GRAY)),
+                        Span::styled(text_line, Style::default()),
+                    ]));
                 }
             }
             MessageKind::System => {
@@ -140,9 +149,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(vec![
                     Span::styled(
                         "  error: ",
-                        Style::default()
-                            .fg(theme::RED)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme::RED).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         msg.text.lines().next().unwrap_or(""),
@@ -161,22 +168,38 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
     if let Some(ref streaming) = app.streaming_response {
         lines.push(Line::from(""));
-        for text_line in streaming.lines() {
-            lines.push(Line::from(Span::styled(
-                format!("  {}", text_line),
-                Style::default().fg(theme::CYAN),
-            )));
+        let mut streaming_lines = streaming.lines();
+        if let Some(first_line) = streaming_lines.next() {
+            lines.push(Line::from(vec![
+                Span::styled("  ai ", theme::bold_accent()),
+                Span::styled(first_line, Style::default()),
+            ]));
         }
-        lines.push(Line::from(Span::styled(
-            "  _",
-            Style::default()
-                .fg(theme::CYAN)
-                .add_modifier(Modifier::SLOW_BLINK),
-        )));
+        for text_line in streaming_lines {
+            lines.push(Line::from(vec![
+                Span::styled("     ", Style::default().fg(theme::DARK_GRAY)),
+                Span::styled(text_line, Style::default()),
+            ]));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("     ", Style::default().fg(theme::DARK_GRAY)),
+            Span::styled("_", theme::bold_accent().add_modifier(Modifier::SLOW_BLINK)),
+        ]));
     }
 
     let total_lines = lines.len();
-    let visible_height = area.height as usize;
+    let show_scroll_hint = app.scroll_offset > 0;
+    let message_area = if show_scroll_hint && area.height > 1 {
+        Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: area.height - 1,
+        }
+    } else {
+        area
+    };
+    let visible_height = message_area.height as usize;
     let max_offset = total_lines.saturating_sub(visible_height);
     let offset = app.scroll_offset.min(max_offset);
     let start = max_offset.saturating_sub(offset);
@@ -184,10 +207,10 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(visible).wrap(Wrap { trim: false }),
-        area,
+        message_area,
     );
 
-    if offset > 0 {
+    if show_scroll_hint && offset > 0 {
         let hint = Line::from(Span::styled(
             format!("  ── {} more lines (PgUp to scroll) ──", offset),
             Style::default().fg(theme::DARK_GRAY),

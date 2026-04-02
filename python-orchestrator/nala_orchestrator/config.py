@@ -90,7 +90,8 @@ class Config(BaseModel):
         if home_env.exists():
             load_dotenv(home_env, override=False)
         if project_env.exists():
-            load_dotenv(project_env, override=False)
+            # Project-local config should override ~/.nala/.env for testing.
+            load_dotenv(project_env, override=True)
 
         def _int(key: str, default: int) -> int:
             raw = os.environ.get(key)
