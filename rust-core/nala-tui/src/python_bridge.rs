@@ -520,12 +520,6 @@ async fn bridge_task(
                     None => break, // All PythonBridge handles dropped
                     Some(req) => {
                         let id = next_id();
-                        let req_type_label = match &req {
-                            BridgeRequest::Query { .. } => "query",
-                            BridgeRequest::IndexContext { .. } => "index_context",
-                            _ => "other",
-                        };
-                        eprintln!("[bridge] SEND id={id} type={req_type_label}");
                         let msg = match req {
                             BridgeRequest::Query { text, project_root } => json!({
                                 "id": id,
@@ -816,7 +810,6 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
     let msg = match serde_json::from_str::<Value>(raw) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("[bridge] malformed JSON from Python: {e} — line: {}", &raw[..raw.len().min(200)]);
             let _ = bg_tx.send(BackgroundEvent::AssistantError(
                 format!("Received malformed response from AI backend: {e}")
             )).await;
@@ -825,8 +818,6 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
     };
 
     let msg_type = msg.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    let msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-    eprintln!("[bridge] RECV id={msg_id} type={msg_type}");
 
     match msg_type {
         "chunk" => {

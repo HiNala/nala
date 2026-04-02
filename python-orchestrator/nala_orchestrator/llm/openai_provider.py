@@ -79,25 +79,25 @@ class OpenAIProvider(BaseLLMProvider):
         system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
-        import asyncio
+        all_messages = []
+        if system_prompt:
+            all_messages.append({"role": "system", "content": system_prompt})
+        all_messages.extend(
+            {"role": m.role, "content": m.content} for m in messages
+        )
 
-        log.debug("stream_chat starting (non-stream with chunking)")
+        log.debug("stream_chat starting (true streaming)")
         try:
-            response = await asyncio.wait_for(
-                self.chat(
-                    messages=messages,
-                    system_prompt=system_prompt,
-                    max_tokens=max_tokens,
-                ),
-                timeout=_TIMEOUT_SECONDS,
+            stream = await self._client.chat.completions.create(
+                model=self.model,
+                messages=all_messages,
+                max_tokens=max_tokens,
+                stream=True,
             )
-        except TimeoutError:
-            log.error("OpenAI request timed out after %ds", _TIMEOUT_SECONDS)
-            yield f"Request timed out after {_TIMEOUT_SECONDS}s. Check your network connection."
-            return
-
-        content = response.content or ""
-        log.debug("stream_chat got %d chars, chunking", len(content))
-        chunk_size = 160
-        for start in range(0, len(content), chunk_size):
-            yield content[start : start + chunk_size]
+            async for event in stream:
+                delta = event.choices[0].delta if event.choices else None
+                if delta and delta.content:
+                    yield delta.content
+        except Exception as exc:
+            log.error("OpenAI streaming failed: %s", exc)
+            yield f"\n\nError: {exc}"

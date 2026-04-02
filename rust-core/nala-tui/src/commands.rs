@@ -137,6 +137,9 @@ impl App {
                 let args = parts.get(1).copied().unwrap_or("").trim();
                 self.handle_brain_command(args);
             }
+            "/tree" | "/files" => {
+                self.show_file_tree();
+            }
             _ => {
                 self.push_message(Message::error(format!(
                     "Unknown command: {}. Type /help.",
@@ -202,12 +205,77 @@ impl App {
             "  /brain review-diff     — review current git diff\n",
             "  /brain verify          — run quick verification analysis\n",
             "  /brain status          — show doctor + task + team status\n",
+            "  /tree                  — show project file tree\n",
             "  /doctor                — environment and readiness diagnostics\n",
             "  /clear                 — clear message log\n",
             "  /help                  — show this help\n",
             "  /quit | /exit          — exit\n\n",
+            "Key bindings:\n",
+            "  Up/Down arrows         — cycle through command history\n",
+            "  Shift+Up/Down          — scroll message area\n",
+            "  PgUp/PgDn              — scroll message area (larger jump)\n",
+            "  Mouse wheel            — scroll message area\n",
+            "  Ctrl+B                 — toggle file panel\n",
+            "  Ctrl+E                 — toggle session panel\n",
+            "  Esc                    — cancel / clear input\n\n",
             "Or just type a question to ask the AI.",
         )));
+    }
+
+    fn show_file_tree(&mut self) {
+        let root = &self.project_root;
+        let skip: std::collections::HashSet<&str> = [
+            ".git", "node_modules", "__pycache__", ".nala", "target",
+            "dist", "build", ".next", ".venv", "venv", ".mypy_cache",
+            ".ruff_cache", ".pytest_cache",
+        ].into_iter().collect();
+
+        let mut lines = Vec::new();
+        lines.push(format!("{}/", root.file_name().unwrap_or_default().to_string_lossy()));
+        Self::walk_tree(root, "", &skip, &mut lines, 0, 60);
+        self.push_message(Message::assistant(lines.join("\n")));
+    }
+
+    fn walk_tree(
+        dir: &Path,
+        prefix: &str,
+        skip: &std::collections::HashSet<&str>,
+        lines: &mut Vec<String>,
+        depth: usize,
+        max_lines: usize,
+    ) {
+        if lines.len() >= max_lines || depth > 3 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+        entries.sort_by(|a, b| {
+            let a_dir = a.file_type().map(|f| f.is_dir()).unwrap_or(false);
+            let b_dir = b.file_type().map(|f| f.is_dir()).unwrap_or(false);
+            b_dir.cmp(&a_dir).then(a.file_name().cmp(&b.file_name()))
+        });
+        let entries: Vec<_> = entries.into_iter().filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            !name.starts_with('.') && !skip.contains(name.as_ref())
+        }).collect();
+        let total = entries.len();
+        for (i, entry) in entries.into_iter().enumerate() {
+            if lines.len() >= max_lines {
+                lines.push(format!("{prefix}..."));
+                return;
+            }
+            let is_last = i == total - 1;
+            let connector = if is_last { "└── " } else { "├── " };
+            let is_dir = entry.file_type().map(|f| f.is_dir()).unwrap_or(false);
+            let name = entry.file_name();
+            let suffix = if is_dir { "/" } else { "" };
+            lines.push(format!("{prefix}{connector}{}{suffix}", name.to_string_lossy()));
+            if is_dir {
+                let ext = if is_last { "    " } else { "│   " };
+                Self::walk_tree(&entry.path(), &format!("{prefix}{ext}"), skip, lines, depth + 1, max_lines);
+            }
+        }
     }
 
     pub(crate) fn run_perspectives(&mut self, perspective: String) {

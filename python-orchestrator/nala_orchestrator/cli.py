@@ -385,7 +385,7 @@ async def handle_request(
                             "split_all: %d chunks in %.1fs",
                             len(chunks), t2 - t1,
                         )
-                        emb.build(chunks)
+                        emb.build(chunks, source_file_count=total)
                         t3 = _t.monotonic()
                         log.warning(
                             "embedder.build: %.1fs (total %.1fs)",
@@ -403,6 +403,14 @@ async def handle_request(
                     log.warning(
                         "index_context: chunks built in %.1fs", elapsed,
                     )
+                    msg = (
+                        f"Context ready: {emb.chunk_count} code chunks"
+                        f" indexed in {elapsed:.1f}s."
+                    )
+                    write_response({
+                        "id": req_id, "type": "chunk", "text": msg,
+                    })
+                    write_response({"id": req_id, "type": "done"})
                 except TimeoutError:
                     log.error(
                         "index_context: chunk build timed out (120s)",

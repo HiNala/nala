@@ -14,7 +14,7 @@
 //!   └──────────────────────────────────────┘
 
 use crate::app::{App, AppMode, MessageKind};
-use crate::ui::{command_bar, diff, file_panel, session_panel, splash, status_bar, theme};
+use crate::ui::{command_bar, diff, file_panel, markdown, session_panel, splash, status_bar, theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -130,24 +130,14 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             }
             MessageKind::Assistant => {
                 lines.push(Line::from(""));
-                let mut assistant_lines = msg.text.lines();
-                if let Some(first_line) = assistant_lines.next() {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            "  ai ",
-                            Style::default()
-                                .fg(theme::CYAN)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(first_line, Style::default().fg(theme::WHITE)),
-                    ]));
-                }
-                for text_line in assistant_lines {
-                    lines.push(Line::from(Span::styled(
-                        format!("     {}", text_line),
-                        Style::default().fg(theme::WHITE),
-                    )));
-                }
+                lines.push(Line::from(Span::styled(
+                    "  ai ",
+                    Style::default()
+                        .fg(theme::CYAN)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                let md_lines = markdown::render_markdown(&msg.text, "    ");
+                lines.extend(md_lines);
             }
             MessageKind::System => {
                 lines.push(Line::from(Span::styled(
@@ -184,24 +174,14 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
     if let Some(ref streaming) = app.streaming_response {
         lines.push(Line::from(""));
-        let mut streaming_lines = streaming.lines();
-        if let Some(first_line) = streaming_lines.next() {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "  ai ",
-                    Style::default()
-                        .fg(theme::CYAN)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(first_line, Style::default().fg(theme::WHITE)),
-            ]));
-        }
-        for text_line in streaming_lines {
-            lines.push(Line::from(Span::styled(
-                format!("     {}", text_line),
-                Style::default().fg(theme::WHITE),
-            )));
-        }
+        lines.push(Line::from(Span::styled(
+            "  ai ",
+            Style::default()
+                .fg(theme::CYAN)
+                .add_modifier(Modifier::BOLD),
+        )));
+        let md_lines = markdown::render_markdown(streaming, "    ");
+        lines.extend(md_lines);
         lines.push(Line::from(Span::styled(
             "     _",
             Style::default()
@@ -210,7 +190,6 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let total_lines = lines.len();
     let show_scroll_hint = app.scroll_offset > 0;
     let message_area = if show_scroll_hint && area.height > 1 {
         Rect {
@@ -222,20 +201,37 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         area
     };
+
     let visible_height = message_area.height as usize;
-    let max_offset = total_lines.saturating_sub(visible_height);
-    let offset = app.scroll_offset.min(max_offset);
-    let start = max_offset.saturating_sub(offset);
-    let visible: Vec<Line> = lines.into_iter().skip(start).take(visible_height).collect();
+    let w = message_area.width as usize;
+    let total_visual: usize = lines
+        .iter()
+        .map(|line| {
+            let lw = line.width();
+            if lw == 0 || w == 0 {
+                1
+            } else {
+                (lw + w - 1) / w
+            }
+        })
+        .sum();
+    let max_scroll = total_visual.saturating_sub(visible_height);
+    let clamped_offset = app.scroll_offset.min(max_scroll);
+    let scroll_y = max_scroll.saturating_sub(clamped_offset);
 
     frame.render_widget(
-        Paragraph::new(visible).wrap(Wrap { trim: false }),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_y as u16, 0)),
         message_area,
     );
 
-    if show_scroll_hint && offset > 0 {
+    if show_scroll_hint && clamped_offset > 0 {
         let hint = Line::from(Span::styled(
-            format!("  ── {} more lines (PgUp/PgDn or mouse wheel) ──", offset),
+            format!(
+                "  ── {} more lines (Shift+\u{2191}/\u{2193}, PgUp/PgDn, or mouse wheel) ──",
+                clamped_offset,
+            ),
             Style::default().fg(theme::GRAY),
         ));
         frame.render_widget(

@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT_TEMPLATE = """\
 You are Nala, a terminal-first AI coding assistant with deep understanding
-of the project you are analysing.
+of the project you are analysing. You have indexed and can search the full
+codebase. When answering, cite specific files, functions, and line numbers.
 
 Project: {project_name}
 Location: {project_root}
@@ -44,15 +45,22 @@ Files indexed: {total_files}
 Symbols found: {total_symbols}
 Primary language: {primary_language}
 
-Your role is to:
-- Answer questions about the codebase concisely and accurately
-- Suggest specific improvements with file:line references
-- Generate actionable refactoring suggestions
-- Explain complex code in plain English
-- Identify risks, bugs, and architectural issues
+## Your capabilities
+- Search and read any file in the project via your indexed context
+- Suggest edits with exact file paths and line numbers
+- Explain code, architecture, and data flow across the codebase
+- Identify bugs, risks, complexity hotspots, and dead code
+- Generate refactoring plans with step-by-step actions
+- When the user uses /act, you can propose file edits, file creation, and shell commands
 
-When referencing code, always include file paths and line numbers.
-Keep responses focused and actionable. The developer is experienced — skip basics.
+## Response guidelines
+- Be concise and specific — cite file:line references
+- Use markdown formatting: **bold**, `inline code`, ```code blocks```
+- Structure longer answers with ## headings and bullet points
+- The developer is experienced — skip basics, focus on insight
+
+## Project structure
+{file_tree}
 
 ## Retrieved context
 {retrieved_context}
@@ -159,6 +167,50 @@ class AgentOrchestrator:
         self._compactor = Compactor(keep_recent=self._compaction_cfg.keep_recent_turns)
         self._bg_summary = BackgroundSummary()
 
+    # ── File tree ──────────────────────────────────────────────────────────
+
+    def _build_file_tree(self, max_lines: int = 80) -> str:
+        """Build a compact directory tree for the system prompt."""
+        root = Path(self.context.project_root)
+        if not root.is_dir():
+            return "(project root not found)"
+
+        skip = {
+            ".git", "node_modules", "__pycache__", ".nala", "target",
+            "dist", "build", ".next", ".venv", "venv", ".mypy_cache",
+            ".ruff_cache", ".pytest_cache", "egg-info",
+        }
+        lines: list[str] = []
+
+        def _walk(p: Path, prefix: str, depth: int) -> None:
+            if len(lines) >= max_lines:
+                return
+            try:
+                entries = sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+            except PermissionError:
+                return
+            dirs = [
+                e for e in entries
+                if e.is_dir() and e.name not in skip and not e.name.startswith(".")
+            ]
+            files = [
+                e for e in entries
+                if e.is_file() and not e.name.startswith(".")
+            ]
+            items = dirs + files
+            for i, entry in enumerate(items):
+                if len(lines) >= max_lines:
+                    lines.append(f"{prefix}...")
+                    return
+                connector = "└── " if i == len(items) - 1 else "├── "
+                lines.append(f"{prefix}{connector}{entry.name}{'/' if entry.is_dir() else ''}")
+                if entry.is_dir() and depth < 3:
+                    extension = "    " if i == len(items) - 1 else "│   "
+                    _walk(entry, prefix + extension, depth + 1)
+
+        _walk(root, "", 0)
+        return "\n".join(lines) if lines else "(empty project)"
+
     # ── Retrieval ──────────────────────────────────────────────────────────
 
     def set_embedder(self, embedder: Embedder) -> None:
@@ -215,12 +267,14 @@ class AgentOrchestrator:
     def build_system_prompt(self, query: str = "") -> str:
         """Build the system prompt with current project context and retrieved chunks."""
         retrieved = self._retrieve_context(query) if query else "(no query provided)"
+        file_tree = self._build_file_tree()
         base = SYSTEM_PROMPT_TEMPLATE.format(
             project_name=Path(self.context.project_root).name,
             project_root=self.context.project_root,
             total_files=self.context.total_files,
             total_symbols=self.context.total_symbols,
             primary_language=self.context.primary_language,
+            file_tree=file_tree,
             retrieved_context=retrieved,
         )
         injections = self.context.get_system_injections()

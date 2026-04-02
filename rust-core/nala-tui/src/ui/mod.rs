@@ -7,6 +7,7 @@ pub mod command_bar;
 pub mod diff;
 pub mod file_panel;
 pub mod layout;
+pub mod markdown;
 pub mod session_panel;
 pub mod splash;
 pub mod status_bar;

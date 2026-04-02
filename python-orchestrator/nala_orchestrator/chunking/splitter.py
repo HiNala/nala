@@ -167,16 +167,30 @@ class ChunkSplitter:
         symbols: list[Symbol],
     ) -> list[Chunk]:
         """Chunk all source files in the project."""
-        # Group symbols by file for efficient lookup.
+        root = Path(project_root)
+
         by_file: dict[str, list[Symbol]] = {}
         for sym in symbols:
             by_file.setdefault(sym.file_path, []).append(sym)
 
         all_chunks: list[Chunk] = []
-        for file_path, file_syms in by_file.items():
-            all_chunks.extend(self.split_file(file_path, file_syms))
+        for rel_path, file_syms in by_file.items():
+            abs_path = root / rel_path
+            if not abs_path.exists():
+                continue
+            all_chunks.extend(self.split_file(
+                str(rel_path), file_syms,
+                source_lines=self._read_lines(abs_path),
+            ))
 
         return all_chunks
+
+    @staticmethod
+    def _read_lines(path: Path) -> list[str] | None:
+        try:
+            return path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        except OSError:
+            return None
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 

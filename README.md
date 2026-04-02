@@ -8,26 +8,32 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 
 ### What works today
 
-- **Instant codebase scanning** — hash-based change detection on 160+ file projects in < 0.05s
+- **Instant codebase scanning** — hash-based change detection on 170+ file projects in < 0.05s
 - **Full Tree-sitter indexing** — extracts functions, classes, imports across Rust, Python, JS/TS, Go
+- **RAG-powered code context** — chunks every indexed file, retrieves relevant code via BM25 (+ optional vector embeddings), injects into every LLM query
+- **Real-time streaming** — true token-by-token streaming from OpenAI, Anthropic, Google, and Ollama
+- **Markdown rendering** — AI responses display with **bold**, `inline code`, ```code blocks```, headings, and bullet points
 - **Custom TUI** with themed panels, branded top bar, file tree, session history, progress gauge
-- **Python AI bridge** — streams LLM responses (OpenAI, Anthropic, Google, Ollama) via IPC
+- **Python AI bridge** — streams LLM responses via IPC with project structure and file tree awareness
 - **LSP integration** — go-to-definition, find-references, hover, live diagnostics
 - **Analysis perspectives** — security, complexity, churn, performance, dependency audits
 - **Session management** — save, resume, and review past analysis sessions
 - **Action mode** — `/act` to ask AI to propose file edits with diff preview + y/n confirmation
 - **Context window management** — `/context` usage, `/compact` compaction with handoff docs
 - **Brain Mode (optional)** — `/brain` workflow for deeper objective-driven investigation, triage, and verification
+- **Clipboard paste** — bracketed paste support for pasting text from clipboard into input
 
 ### Terminal UI Highlights
 
 - Custom dark theme with semantic color palette (blue-violet accent family)
 - Top bar with project name, git branch, LSP status, and mode badge
-- Message area with role badges (YOU/AI/SYS/ERR), separators, and scrollbar
+- **Markdown rendering** in AI responses: bold, code blocks with language labels, headings, bullets, inline code
+- Message area with role badges (AI/YOU/SYS/ERR) and word-wrap-aware scrolling
 - File tree panel with language-colored icons and scanner-aligned skip rules
 - Visual progress gauge during indexing
 - Ctrl+Left/Right word jump, Ctrl+W delete-word, mouse click support
-- Mouse wheel message scrolling, PgUp/PgDn scroll, and improved prompt history navigation (`↑`/`↓`)
+- Mouse wheel / `PgUp`/`PgDn` / `Shift+↑`/`↓` message scrolling + `↑`/`↓` prompt history
+- Bracketed paste support — paste from clipboard with Ctrl+V
 - Live LSP diagnostics (error/warning counts in status bar and top bar)
 - Diff confirmation view with color-coded add/remove/context lines
 
@@ -113,6 +119,7 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `/brain hotspot` / `/brain verify` | Run quick triage / verification analysis |
 | `/brain review-diff` | Review current git diff via AI bridge |
 | `/branch` / `/diff` / `/status` | Repo-aware git summaries inside TUI |
+| `/tree` / `/files` | Show project file tree |
 | `/session` | List past sessions |
 | `/quit` | Exit |
 | *Any other text* | Ask the AI assistant |
@@ -126,11 +133,12 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `Ctrl+←` / `Ctrl+→` | Jump word left/right |
 | `Ctrl+W` | Delete word backward |
 | `↑` / `↓` | Navigate command history |
+| `Shift+↑` / `Shift+↓` | Scroll message area (3 lines) |
+| `PgUp` / `PgDn` | Scroll message area (10 lines) |
+| Mouse wheel | Scroll message area |
 | `Home` / `End` | Jump to start/end of input |
-| `Esc` | Clear current input |
+| `Esc` | Cancel analysis / clear input |
 | `Ctrl+C` / `Ctrl+Q` | Quit |
-| Mouse click | Open file panel, interact with UI |
-| Mouse wheel / `PgUp` / `PgDn` | Scroll message history |
 
 ---
 
@@ -176,11 +184,13 @@ If you haven't run the setup script, you can run the binary directly:
 
 ## Troubleshooting
 
-- Command not found after setup: open a **new terminal** so PATH updates are loaded.
-- Wrong Python interpreter: set `NALA_PYTHON` to your `.venv` Python executable.
-- AI says provider is missing despite `.env`: restart Nala after key changes. Config now resolves `.env` from parent dirs (for launches from subfolders like `rust-core`).
-- Dashboard startup fails: re-run setup (`scripts/setup.sh` or `scripts/setup.ps1`) to install `fastapi` and `uvicorn`.
-- No symbols after `scan`: run `index` (index now reparses discovered files even when scan cache is warm).
+- **Command not found after setup:** open a **new terminal** so PATH updates are loaded.
+- **Wrong Python interpreter:** set `NALA_PYTHON` to your `.venv` Python executable.
+- **AI says provider is missing despite `.env`:** restart Nala after key changes. Config resolves `.env` from parent directories automatically.
+- **AI responses are generic / don't reference code:** wait for the "Context ready: N code chunks indexed" message. If it never appears, check that your project has parseable source files.
+- **Dashboard startup fails:** re-run setup (`scripts/setup.sh` or `scripts/setup.ps1`) to install `fastapi` and `uvicorn`.
+- **No symbols after `scan`:** run `/index` (index reparses even when scan cache is warm).
+- **Can't paste text:** make sure your terminal supports bracketed paste (Windows Terminal, iTerm2, most modern terminals do).
 
 ---
 
@@ -196,7 +206,7 @@ nala/
 │   │   ├── lsp_commands.rs LSP go-to-def / refs / hover
 │   │   ├── actions.rs      Inline-edit confirmation workflow
 │   │   ├── python_bridge.rs IPC bridge to Python orchestrator
-│   │   └── ui/             Rendering (layout, splash, panels, bars)
+│   │   └── ui/             Rendering (layout, markdown, splash, panels, bars)
 │   ├── nala-indexer/       Tree-sitter parsing, hashing, SQLite cache
 │   ├── nala-lsp/           LSP client (JSON-RPC transport)
 │   └── nala-bridge/        PyO3 bindings (Rust → Python)
@@ -204,10 +214,13 @@ nala/
 │   └── nala_orchestrator/
 │       ├── config.py       Configuration (loads from .env)
 │       ├── llm/            LLM providers (Anthropic, OpenAI, Google, Ollama)
+│       ├── chunking/       Code chunk splitter, BM25/vector embedder, context assembler
+│       ├── context/        Token counting, compaction, background summaries
+│       ├── memory/         Session memory and knowledge base persistence
 │       ├── graph/          Neo4j code knowledge graph
 │       ├── perspectives/   Analysis engines (complexity, security, churn, …)
 │       ├── sessions/       Session management and report generation
-│       └── agents/         LLM query orchestration
+│       └── agents/         LLM query orchestration, action extraction/execution
 ├── dashboard/              Optional FastAPI + D3.js web dashboard
 ├── scripts/                Setup and benchmark scripts
 └── docs/missions/          Complete build plan (26 missions)

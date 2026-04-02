@@ -380,13 +380,15 @@ impl App {
         let mut terminal = ratatui::init();
         crossterm::execute!(
             std::io::stdout(),
-            crossterm::event::EnableMouseCapture
+            crossterm::event::EnableMouseCapture,
+            crossterm::event::EnableBracketedPaste
         )?;
         self.start_python_bridge().await;
         let result = self.event_loop(&mut terminal).await;
         self.cleanup_dashboard_process();
         crossterm::execute!(
             std::io::stdout(),
+            crossterm::event::DisableBracketedPaste,
             crossterm::event::DisableMouseCapture
         )?;
         ratatui::restore();
@@ -441,11 +443,20 @@ impl App {
         match event {
             Event::Key(key) => self.handle_key(key),
             Event::Mouse(mouse) => self.handle_mouse(mouse),
+            Event::Paste(text) => self.handle_paste(text),
             Event::Resize(_, h) => {
                 self.last_area_height = h;
             }
             _ => {}
         }
+    }
+
+    fn handle_paste(&mut self, text: String) {
+        let clean = text.replace('\r', "").replace('\n', " ");
+        self.input.insert_str(self.cursor_pos, &clean);
+        self.cursor_pos += clean.len();
+        self.history_idx = None;
+        self.tab_index = None;
     }
 
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
@@ -471,6 +482,24 @@ impl App {
 
         if key.kind != KeyEventKind::Press {
             return;
+        }
+
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                Up => {
+                    self.scroll_offset = self.scroll_offset.saturating_add(3);
+                    self.scroll_locked_to_bottom = false;
+                    return;
+                }
+                Down => {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                    if self.scroll_offset == 0 {
+                        self.scroll_locked_to_bottom = true;
+                    }
+                    return;
+                }
+                _ => {}
+            }
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1043,6 +1072,8 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/brain review-diff",
     "/brain verify",
     "/brain status",
+    "/tree",
+    "/files",
     "/clear",
     "/quit",
 ];

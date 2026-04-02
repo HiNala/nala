@@ -33,11 +33,7 @@ class AnthropicProvider(BaseLLMProvider):
         max_tokens: int = 4096,
     ) -> LLMResponse:
 
-        anthropic_messages = [
-            {"role": m.role, "content": m.content}
-            for m in messages
-            if m.role != "system"
-        ]
+        anthropic_messages = self._convert_messages(messages)
 
         kwargs: dict = {
             "model": self.model,
@@ -64,11 +60,7 @@ class AnthropicProvider(BaseLLMProvider):
         system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
-        anthropic_messages = [
-            {"role": m.role, "content": m.content}
-            for m in messages
-            if m.role != "system"
-        ]
+        anthropic_messages = self._convert_messages(messages)
 
         kwargs: dict = {
             "model": self.model,
@@ -81,3 +73,23 @@ class AnthropicProvider(BaseLLMProvider):
         async with self._client.messages.stream(**kwargs) as stream:
             async for text in stream.text_stream:
                 yield text
+
+    @staticmethod
+    def _convert_messages(
+        messages: list[LLMMessage],
+    ) -> list[dict[str, str]]:
+        """Convert messages for the Anthropic API.
+
+        Mid-conversation ``system`` messages (e.g. compaction summaries)
+        are re-roled as ``user`` so they aren't silently dropped.
+        """
+        out: list[dict[str, str]] = []
+        for m in messages:
+            role = m.role
+            if role == "system":
+                role = "user"
+            if out and out[-1]["role"] == role:
+                out[-1]["content"] += "\n\n" + m.content
+            else:
+                out.append({"role": role, "content": m.content})
+        return out

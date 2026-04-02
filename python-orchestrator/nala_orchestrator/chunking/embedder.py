@@ -88,13 +88,14 @@ class Embedder:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def build(self, chunks: list[Chunk]) -> None:
+    def build(self, chunks: list[Chunk], source_file_count: int = 0) -> None:
         """Index all chunks. Call after a scan/index completes."""
         self._chunks = chunks
+        self._source_file_count = source_file_count
         self._bm25.build(chunks)
         self._try_build_vector_index(chunks)
-        log.info("Embedder indexed %d chunks (vector=%s)",
-                 len(chunks), self._chroma_collection is not None)
+        log.info("Embedder indexed %d chunks from %d files (vector=%s)",
+                 len(chunks), source_file_count, self._chroma_collection is not None)
 
     def retrieve(self, query: str, top_k: int = _DEFAULT_TOP_K) -> list[Chunk]:
         """Return the top-k most relevant chunks for a query."""
@@ -106,10 +107,12 @@ class Embedder:
         return self._bm25.retrieve(query, top_k)
 
     def needs_rebuild(self, current_file_count: int) -> bool:
-        """True if the index is stale (>5% change in file count)."""
+        """True if the index should be rebuilt."""
         if not self._chunks:
             return True
-        ratio = abs(current_file_count - len(self._chunks)) / max(1, len(self._chunks))
+        if not hasattr(self, "_source_file_count") or self._source_file_count == 0:
+            return True
+        ratio = abs(current_file_count - self._source_file_count) / max(1, self._source_file_count)
         return ratio > 0.05
 
     def is_ready(self) -> bool:

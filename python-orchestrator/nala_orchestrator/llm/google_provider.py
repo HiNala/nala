@@ -71,12 +71,18 @@ class GoogleProvider(BaseLLMProvider):
             system_instruction=system_prompt,
         )
 
-        last_msg = messages[-1].content if messages else ""
-        loop = asyncio.get_event_loop()
+        history = []
+        for msg in messages[:-1]:
+            role = "user" if msg.role == "user" else "model"
+            history.append({"role": role, "parts": [msg.content]})
 
+        last_msg = messages[-1].content if messages else ""
+        chat_session = model.start_chat(history=history)
+
+        loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: model.generate_content(last_msg, stream=True),
+            lambda: chat_session.send_message(last_msg, stream=True),
         )
 
         for chunk in response:
