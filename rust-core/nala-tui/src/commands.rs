@@ -1,0 +1,549 @@
+//! Slash-command dispatch and bridge-backed command handlers.
+//!
+//! Extracted from `app.rs` to keep the main state module focused on
+//! the event loop and state transitions.
+
+use crate::app::{App, AppMode, BackgroundEvent, Message};
+
+impl App {
+    pub(crate) fn handle_slash_command(&mut self, cmd: &str) {
+        let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
+        match parts[0] {
+            "/help" => self.show_help(),
+            "/quit" | "/exit" => {
+                self.should_quit = true;
+            }
+            "/scan" => {
+                self.push_message(Message::system("Scanning project..."));
+                self.index_progress = Some(0.2);
+                self.start_background_index();
+            }
+            "/index" => {
+                self.push_message(Message::system("Indexing project..."));
+                self.index_progress = Some(0.2);
+                self.start_background_index();
+            }
+            "/analyze" | "/analyse" => {
+                let perspective = parts.get(1).copied().unwrap_or("all").to_string();
+                self.run_perspectives(perspective);
+            }
+            "/scope" => {
+                let args = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.set_analysis_scope(args);
+            }
+            "/lsp" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                if args == "status" {
+                    self.lsp_status();
+                } else {
+                    self.push_message(Message::error("Usage: /lsp status"));
+                }
+            }
+            "/def" => {
+                let spec = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.lsp_definition(spec);
+            }
+            "/refs" => {
+                let spec = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.lsp_references(spec);
+            }
+            "/hover" => {
+                let spec = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.lsp_hover(spec);
+            }
+            "/doctor" => self.doctor(),
+            "/session" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.handle_session_command(args);
+            }
+            "/generate" => {
+                let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.generate_mission(focus);
+            }
+            "/act" => {
+                let query = parts.get(1).copied().unwrap_or("").trim().to_string();
+                if query.is_empty() {
+                    self.push_message(Message::error("Usage: /act <instruction>"));
+                } else {
+                    self.send_action_query(query);
+                }
+            }
+            "/context" => self.show_context_usage(),
+            "/compact" => {
+                let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.compact_context(focus);
+            }
+            "/graph" => self.graph_stats(),
+            "/team" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                match args {
+                    "status" => self.team_status(),
+                    "cancel" => self.team_cancel(),
+                    "" => self.push_message(Message::error(
+                        "Usage: /team <objective>  |  /team status  |  /team cancel",
+                    )),
+                    objective => self.team_start(objective.to_string()),
+                }
+            }
+            "/handoff" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                match args {
+                    "save" => self.handoff_save(),
+                    "history" => self.handoff_history(),
+                    _ => self.handoff_show(),
+                }
+            }
+            "/clear" => {
+                self.messages.clear();
+            }
+            _ => {
+                self.push_message(Message::error(format!(
+                    "Unknown command: {}. Type /help.",
+                    parts[0]
+                )));
+            }
+        }
+    }
+
+    fn show_help(&mut self) {
+        self.push_message(Message::assistant(concat!(
+            "Available commands:\n",
+            "  /scan                  — scan project files\n",
+            "  /index                 — full index (parse + symbols)\n",
+            "  /scope                 — show current analysis scope\n",
+            "  /scope <relative/path> — analyze only that subtree\n",
+            "  /scope clear           — analyze whole project again\n",
+            "  /analyze               — run all analysis perspectives\n",
+            "  /analyze quick         — run fast subset (complexity/security/dependency)\n",
+            "  /analyze <name>        — run one perspective (security, complexity, …)\n",
+            "  /def <file:l:c>        — LSP go-to-definition\n",
+            "  /refs <file:l:c>       — LSP find-references\n",
+            "  /hover <file:l:c>      — LSP hover docs\n",
+            "  /lsp status            — show LSP server status for this repo\n",
+            "  /act <instruction>     — ask AI to make changes (with diff preview + confirm)\n",
+            "  /graph                 — show Neo4j code graph statistics\n",
+            "  /team <objective>      — start a multi-agent team run\n",
+            "  /team status           — show current team run status\n",
+            "  /team cancel           — cancel the current team run\n",
+            "  /handoff               — show latest session handoff document\n",
+            "  /handoff save          — save a handoff document now\n",
+            "  /handoff history       — show full handoff chain\n",
+            "  /session               — list past sessions\n",
+            "  /session new           — start a fresh session\n",
+            "  /session load <id>     — resume a past session\n",
+            "  /session summary       — show current session summary\n",
+            "  /generate              — generate a mission doc from findings\n",
+            "  /generate <focus>      — generate focused on a topic\n",
+            "  /context               — show context window usage breakdown\n",
+            "  /compact               — compact context window to free tokens\n",
+            "  /compact <focus>       — compact while preserving focus topic\n",
+            "  /doctor                — environment and readiness diagnostics\n",
+            "  /clear                 — clear message log\n",
+            "  /help                  — show this help\n",
+            "  /quit                  — exit\n\n",
+            "Or just type a question to ask the AI.",
+        )));
+    }
+
+    pub(crate) fn run_perspectives(&mut self, perspective: String) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system(
+                "AI bridge is starting up — please wait a moment and try again.",
+            ));
+            return;
+        };
+        let root = if let Some(scope) = &self.analysis_scope {
+            self.project_root.join(scope)
+        } else {
+            self.project_root.clone()
+        };
+        if !root.exists() {
+            self.push_message(Message::error(format!(
+                "Scope path does not exist: {}",
+                root.display()
+            )));
+            return;
+        }
+        let tx = self.bg_tx.clone();
+        self.mode = AppMode::Analyzing;
+        self.push_message(Message::system(format!(
+            "Running {} analysis...",
+            if perspective == "all" {
+                "full".to_string()
+            } else {
+                perspective.clone()
+            }
+        )));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.run_perspectives(root, &perspective).await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    pub(crate) fn set_analysis_scope(&mut self, raw: String) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            let current = self
+                .analysis_scope
+                .clone()
+                .unwrap_or_else(|| "<project root>".to_string());
+            self.push_message(Message::assistant(format!(
+                "Current analysis scope: {}",
+                current
+            )));
+            return;
+        }
+        if trimmed.eq_ignore_ascii_case("clear") {
+            self.analysis_scope = None;
+            self.push_message(Message::system("Analysis scope reset to full project."));
+            return;
+        }
+        let candidate = self.project_root.join(trimmed);
+        if !candidate.exists() {
+            self.push_message(Message::error(format!(
+                "Scope path not found: {}",
+                candidate.display()
+            )));
+            return;
+        }
+        self.analysis_scope = Some(trimmed.to_string());
+        self.push_message(Message::system(format!("Analysis scope set: {}", trimmed)));
+    }
+
+    pub(crate) fn send_llm_query(&mut self, text: String) {
+        match &self.python_bridge {
+            None => {
+                self.push_message(Message::system(
+                    "AI bridge is starting up — please wait a moment and try again.",
+                ));
+            }
+            Some(_) if !self.llm_available => {
+                self.push_message(Message::system(
+                    "No LLM configured. Add ANTHROPIC_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY) to .env and restart.",
+                ));
+            }
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let root = self.project_root.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.query(text, root).await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+        }
+    }
+
+    pub(crate) fn send_action_query(&mut self, text: String) {
+        match &self.python_bridge {
+            None => {
+                self.push_message(Message::system("AI bridge not ready."));
+            }
+            Some(_) if !self.llm_available => {
+                self.push_message(Message::system(
+                    "No LLM configured — cannot run action query. Add an API key to .env.",
+                ));
+            }
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let root = self.project_root.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                self.push_message(Message::system("Thinking... (action mode)"));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.query_with_actions(text, root).await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn show_context_usage(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.context_usage().await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    fn compact_context(&mut self, focus: String) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.push_message(Message::system("Compacting context window..."));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.compact_context(focus).await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    fn handle_session_command(&mut self, args: &str) {
+        let sub: Vec<&str> = args.splitn(2, ' ').collect();
+        match sub[0] {
+            "" => {
+                let Some(bridge) = self.python_bridge.clone() else {
+                    self.push_message(Message::system("AI bridge not ready."));
+                    return;
+                };
+                let root = self.project_root.clone();
+                let tx = self.bg_tx.clone();
+                self.push_message(Message::system("Fetching sessions..."));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.list_sessions(root).await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+            "new" => {
+                let Some(bridge) = self.python_bridge.clone() else {
+                    self.push_message(Message::system("AI bridge not ready."));
+                    return;
+                };
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.new_session().await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+            "load" => {
+                let session_id = sub.get(1).copied().unwrap_or("").trim().to_string();
+                if session_id.is_empty() {
+                    self.push_message(Message::error("Usage: /session load <session_id>"));
+                    return;
+                }
+                let Some(bridge) = self.python_bridge.clone() else {
+                    self.push_message(Message::system("AI bridge not ready."));
+                    return;
+                };
+                let tx = self.bg_tx.clone();
+                self.push_message(Message::system(format!(
+                    "Loading session {}...",
+                    session_id
+                )));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.load_session(session_id).await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+            "summary" => {
+                let Some(bridge) = self.python_bridge.clone() else {
+                    self.push_message(Message::system("AI bridge not ready."));
+                    return;
+                };
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.session_summary().await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+            _ => {
+                self.push_message(Message::error(format!(
+                    "Unknown session subcommand: '{}'. Use: new, load <id>, summary.",
+                    sub[0]
+                )));
+            }
+        }
+    }
+
+    fn generate_mission(&mut self, focus: String) {
+        match &self.python_bridge {
+            None => self.push_message(Message::system("AI bridge not ready.")),
+            Some(_) if !self.llm_available => {
+                self.push_message(Message::system(
+                    "No LLM configured — cannot generate mission. Add an API key to .env.",
+                ));
+            }
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                let label = if focus.is_empty() {
+                    "Generating mission document...".to_string()
+                } else {
+                    format!("Generating mission focused on: {}...", focus)
+                };
+                self.push_message(Message::system(label));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.generate_mission(focus).await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+        }
+    }
+
+    fn graph_stats(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.push_message(Message::system("Fetching graph statistics..."));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.graph_stats().await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    pub(crate) fn doctor(&mut self) {
+        let llm = if self.llm_available {
+            "ready"
+        } else {
+            "missing API key"
+        };
+        let bridge = if self.python_bridge.is_some() {
+            "connected"
+        } else {
+            "not ready"
+        };
+        let scope = self
+            .analysis_scope
+            .clone()
+            .unwrap_or_else(|| "<project root>".to_string());
+        let text = format!(
+            "Environment diagnostics:\n  Project root: {}\n  Analysis scope: {}\n  Python bridge: {}\n  LLM: {}\n  Indexed files: {}\n  Indexed symbols: {}",
+            self.project_root.display(),
+            scope,
+            bridge,
+            llm,
+            self.stats.total_files,
+            self.stats.total_functions
+        );
+        self.push_message(Message::assistant(text));
+    }
+
+    fn team_start(&mut self, objective: String) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.mode = AppMode::Analyzing;
+        self.push_message(Message::system(format!(
+            "Starting agent team: {}...",
+            &objective[..objective.len().min(60)]
+        )));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.team_start(objective).await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    fn team_status(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.team_status().await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    fn team_cancel(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.push_message(Message::system("Cancelling team run..."));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.team_cancel().await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    fn handoff_save(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.push_message(Message::system("Saving handoff document..."));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.handoff_save().await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    fn handoff_show(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.handoff_show().await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    fn handoff_history(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.handoff_history().await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+}

@@ -107,22 +107,29 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 
 ```
 nala/
-├── rust-core/           Rust workspace (TUI, indexer, LSP, PyO3 bridge)
-│   ├── nala-cli/        Binary entry point — type `nala` to start
-│   ├── nala-tui/        Ratatui terminal user interface
-│   ├── nala-indexer/    Tree-sitter parsing, content hashing, SQLite cache
-│   ├── nala-lsp/        LSP client (go-to-def, find-refs, hover)
-│   └── nala-bridge/     PyO3 bindings (Rust → Python)
-├── python-orchestrator/ Python package (AI, Neo4j graph, perspectives)
+├── rust-core/              Rust workspace
+│   ├── nala-cli/           Binary entry point — type `nala` to start
+│   ├── nala-tui/           Ratatui terminal user interface
+│   │   ├── app.rs          State machine + event loop
+│   │   ├── commands.rs     Slash-command dispatch
+│   │   ├── lsp_commands.rs LSP go-to-def / refs / hover
+│   │   ├── actions.rs      Inline-edit confirmation workflow
+│   │   ├── python_bridge.rs IPC bridge to Python orchestrator
+│   │   └── ui/             Rendering (layout, splash, panels, bars)
+│   ├── nala-indexer/       Tree-sitter parsing, hashing, SQLite cache
+│   ├── nala-lsp/           LSP client (JSON-RPC transport)
+│   └── nala-bridge/        PyO3 bindings (Rust → Python)
+├── python-orchestrator/    Python package
 │   └── nala_orchestrator/
-│       ├── config.py    Configuration (loads from .env)
-│       ├── llm/         LLM providers (Anthropic, OpenAI, Google, Ollama)
-│       ├── graph/       Neo4j code knowledge graph
-│       ├── perspectives/ Analysis engines (complexity, deps, dead code...)
-│       ├── sessions/    Session management and report generation
-│       └── agents/      LLM query orchestration
-├── dashboard/           Optional FastAPI + D3.js web dashboard
-└── docs/missions/       Complete build plan (19 missions)
+│       ├── config.py       Configuration (loads from .env)
+│       ├── llm/            LLM providers (Anthropic, OpenAI, Google, Ollama)
+│       ├── graph/          Neo4j code knowledge graph
+│       ├── perspectives/   Analysis engines (complexity, security, churn, …)
+│       ├── sessions/       Session management and report generation
+│       └── agents/         LLM query orchestration
+├── dashboard/              Optional FastAPI + D3.js web dashboard
+├── scripts/                Setup and benchmark scripts
+└── docs/missions/          Complete build plan (24 missions)
 ```
 
 See [docs/missions/MISSION_00_MASTER_PLAN.md](docs/missions/MISSION_00_MASTER_PLAN.md) for the full vision.

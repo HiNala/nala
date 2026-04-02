@@ -229,8 +229,12 @@ fn walk_node_python(node: tree_sitter::Node, source: &str, file_path: &str, out:
 
 fn extract_js_ts(source: &str, file_path: &str, language: &str) -> (Vec<Symbol>, usize) {
     let mut parser = tree_sitter::Parser::new();
-    let lang = tree_sitter_javascript::LANGUAGE;
-    if parser.set_language(&lang.into()).is_err() {
+    let set_ok = match language {
+        "typescript" => parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        "tsx" => parser.set_language(&tree_sitter_typescript::LANGUAGE_TSX.into()),
+        _ => parser.set_language(&tree_sitter_javascript::LANGUAGE.into()),
+    };
+    if set_ok.is_err() {
         return (vec![], 0);
     }
     let tree = match parser.parse(source, None) {

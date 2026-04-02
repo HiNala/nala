@@ -12,7 +12,10 @@
 //! - `ui/file_panel.rs`    — Collapsible file tree panel
 //! - `ui/session_panel.rs` — Collapsible session history panel
 
+pub mod actions;
 pub mod app;
+pub mod commands;
+pub mod lsp_commands;
 pub mod python_bridge;
 pub mod ui;
 

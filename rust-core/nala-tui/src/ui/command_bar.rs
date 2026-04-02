@@ -36,7 +36,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         (" ", "")
     } else {
         let mut chars = after_cursor.char_indices();
-        let (_, ch) = chars.next().unwrap();
+        let ch = match chars.next() {
+            Some((_, c)) => c,
+            None => return, // should not happen after is_empty guard
+        };
         let end = ch.len_utf8();
         (&after_cursor[..end], &after_cursor[end..])
     };
