@@ -60,6 +60,8 @@ pub enum BridgeRequest {
     LoadSession { session_id: String },
     /// Get the current session summary.
     SessionSummary,
+    /// Compare two saved sessions.
+    SessionCompare { older_session_id: String, newer_session_id: String },
     /// Generate a mission document (optionally with a focus).
     GenerateMission { focus: String },
     /// Query with inline-action extraction enabled.
@@ -69,7 +71,7 @@ pub enum BridgeRequest {
     /// Skip (discard) a proposed action.
     SkipAction { action_id: String },
     /// Request a context window usage breakdown.
-    ContextUsage,
+    ContextUsage { display: bool },
     /// Trigger manual context compaction with optional focus hint.
     CompactContext { focus: String },
     /// Show Neo4j graph statistics.
@@ -166,6 +168,21 @@ impl PythonBridge {
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
+    /// Compare two saved sessions.
+    pub async fn session_compare(
+        &self,
+        older_session_id: String,
+        newer_session_id: String,
+    ) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::SessionCompare {
+                older_session_id,
+                newer_session_id,
+            })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
     /// Generate a mission document.
     pub async fn generate_mission(&self, focus: String) -> Result<()> {
         self.request_tx
@@ -201,7 +218,15 @@ impl PythonBridge {
     /// Request the current context window usage breakdown.
     pub async fn context_usage(&self) -> Result<()> {
         self.request_tx
-            .send(BridgeRequest::ContextUsage)
+            .send(BridgeRequest::ContextUsage { display: true })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Refresh context usage state without emitting a chat message.
+    pub async fn context_usage_silent(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::ContextUsage { display: false })
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -462,6 +487,15 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "session_summary",
                             }),
+                            BridgeRequest::SessionCompare {
+                                older_session_id,
+                                newer_session_id,
+                            } => json!({
+                                "id": id,
+                                "type": "session_compare",
+                                "older_session_id": older_session_id,
+                                "newer_session_id": newer_session_id,
+                            }),
                             BridgeRequest::GenerateMission { focus } => json!({
                                 "id": id,
                                 "type": "generate_mission",
@@ -483,9 +517,10 @@ async fn bridge_task(
                                 "type": "skip_action",
                                 "action_id": action_id,
                             }),
-                            BridgeRequest::ContextUsage => json!({
+                            BridgeRequest::ContextUsage { display } => json!({
                                 "id": id,
                                 "type": "context_usage",
+                                "display": display,
                             }),
                             BridgeRequest::CompactContext { focus } => json!({
                                 "id": id,
@@ -779,6 +814,47 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 .to_string();
             let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
             let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        "session_compare" => {
+            let text = msg
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("No session comparison available.")
+                .to_string();
+            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        "context_usage" => {
+            let breakdown = msg.get("breakdown").cloned().unwrap_or(Value::Null);
+            let utilization_pct = breakdown
+                .get("utilization_pct")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let total_tokens = breakdown
+                .get("total_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let effective_limit = breakdown
+                .get("effective_limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let _ = bg_tx
+                .send(BackgroundEvent::ContextUsageUpdated {
+                    utilization_pct,
+                    total_tokens,
+                    effective_limit,
+                })
+                .await;
+
+            if msg.get("display").and_then(|v| v.as_bool()).unwrap_or(true) {
+                let text = msg
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("Context usage unavailable.")
+                    .to_string();
+                let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+                let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+            }
         }
         "memory_sessions" => {
             let sessions = msg.get("sessions").and_then(|v| v.as_array()).cloned().unwrap_or_default();

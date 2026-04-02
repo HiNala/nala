@@ -64,6 +64,11 @@ class SessionManager:
         """Create a new session directory and return its metadata."""
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         session_dir = self.sessions_dir / session_id
+        suffix = 1
+        while session_dir.exists():
+            session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{suffix:02d}"
+            session_dir = self.sessions_dir / session_id
+            suffix += 1
         session_dir.mkdir(parents=True, exist_ok=True)
 
         # Create subdirs for organised output
@@ -249,6 +254,68 @@ class SessionManager:
                     continue
         return sessions
 
+    def compare_sessions(self, older_id: str, newer_id: str) -> str:
+        """Compare two sessions and return a human-readable diff summary."""
+        older = self._load_session_artifacts(older_id)
+        newer = self._load_session_artifacts(newer_id)
+
+        if older is None:
+            raise FileNotFoundError(f"Session {older_id!r} not found")
+        if newer is None:
+            raise FileNotFoundError(f"Session {newer_id!r} not found")
+
+        older_meta, older_findings = older
+        newer_meta, newer_findings = newer
+        older_index = self._finding_index(older_findings)
+        newer_index = self._finding_index(newer_findings)
+
+        new_keys = [k for k in newer_index if k not in older_index]
+        resolved_keys = [k for k in older_index if k not in newer_index]
+        changed_keys = [
+            k for k in newer_index
+            if k in older_index and newer_index[k]["severity"] != older_index[k]["severity"]
+        ]
+
+        lines = [
+            f"Session comparison: **{older_meta.session_id}** -> **{newer_meta.session_id}**",
+            "",
+            f"Older: {sum(len(p.get('findings', [])) for p in older_findings)} findings",
+            f"Newer: {sum(len(p.get('findings', [])) for p in newer_findings)} findings",
+            f"New findings: {len(new_keys)}",
+            f"Resolved findings: {len(resolved_keys)}",
+            f"Severity changes: {len(changed_keys)}",
+        ]
+
+        if new_keys:
+            lines.extend(["", "New in newer session:"])
+            for key in new_keys[:8]:
+                finding = newer_index[key]
+                lines.append(
+                    f"  + [{finding['severity'].upper()}] {finding['title']} "
+                    f"({finding['file_path']}:{finding['start_line']})"
+                )
+
+        if resolved_keys:
+            lines.extend(["", "Resolved since older session:"])
+            for key in resolved_keys[:8]:
+                finding = older_index[key]
+                lines.append(
+                    f"  - [{finding['severity'].upper()}] {finding['title']} "
+                    f"({finding['file_path']}:{finding['start_line']})"
+                )
+
+        if changed_keys:
+            lines.extend(["", "Severity changes:"])
+            for key in changed_keys[:8]:
+                before = older_index[key]
+                after = newer_index[key]
+                lines.append(
+                    f"  * {after['title']} ({after['file_path']}:{after['start_line']}) "
+                    f"{before['severity']} -> {after['severity']}"
+                )
+
+        return "\n".join(lines)
+
     # ── Properties ────────────────────────────────────────────────────────
 
     @property
@@ -268,3 +335,42 @@ class SessionManager:
         path.write_text(
             json.dumps(asdict(self._meta), indent=2), encoding="utf-8"
         )
+
+    def _load_session_artifacts(
+        self,
+        session_id: str,
+    ) -> tuple[SessionMeta, list[dict]] | None:
+        session_dir = self.sessions_dir / session_id
+        meta_path = session_dir / "session.json"
+        findings_path = session_dir / "findings.json"
+        if not meta_path.exists():
+            return None
+
+        meta = SessionMeta.from_dict(json.loads(meta_path.read_text(encoding="utf-8")))
+        findings: list[dict] = []
+        if findings_path.exists():
+            try:
+                findings = json.loads(findings_path.read_text(encoding="utf-8"))
+            except Exception:
+                findings = []
+        return meta, findings
+
+    def _finding_index(self, findings_raw: list[dict]) -> dict[tuple[str, str, int, str], dict]:
+        indexed: dict[tuple[str, str, int, str], dict] = {}
+        for perspective_data in findings_raw:
+            perspective_name = str(perspective_data.get("perspective_name", "unknown"))
+            for finding in perspective_data.get("findings", []):
+                if not isinstance(finding, dict):
+                    continue
+                title = str(finding.get("title", "Untitled finding"))
+                file_path = str(finding.get("file_path", ""))
+                start_line = int(finding.get("start_line", 0) or 0)
+                key = (title, file_path, start_line, perspective_name)
+                indexed[key] = {
+                    "title": title,
+                    "file_path": file_path,
+                    "start_line": start_line,
+                    "severity": str(finding.get("severity", "unknown")),
+                    "perspective": perspective_name,
+                }
+        return indexed

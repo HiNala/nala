@@ -57,6 +57,34 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
+    if app.context_effective_limit > 0 {
+        let ctx_color = if app.context_utilization_pct < 60.0 {
+            theme::GREEN
+        } else if app.context_utilization_pct < 80.0 {
+            theme::YELLOW
+        } else {
+            theme::RED
+        };
+        let bar = context_bar(app.context_utilization_pct);
+        left_spans.push(Span::styled(" · ctx ", Style::default().fg(theme::DARK_GRAY)));
+        left_spans.push(Span::styled(
+            format!("{:.0}% ", app.context_utilization_pct),
+            Style::default().fg(ctx_color).add_modifier(Modifier::BOLD),
+        ));
+        left_spans.push(Span::styled(
+            format!("{} ", bar),
+            Style::default().fg(ctx_color),
+        ));
+        left_spans.push(Span::styled(
+            format!(
+                "{}/{}",
+                short_tokens(app.context_total_tokens),
+                short_tokens(app.context_effective_limit)
+            ),
+            Style::default().fg(theme::DARK_GRAY),
+        ));
+    }
+
     frame.render_widget(Paragraph::new(Line::from(left_spans)), cols[0]);
 
     let mut right_spans: Vec<Span> = Vec::new();
@@ -83,4 +111,20 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(hints).alignment(ratatui::layout::Alignment::Right),
         cols[1],
     );
+}
+
+fn context_bar(utilization_pct: f64) -> String {
+    let filled = ((utilization_pct / 10.0).round() as usize).min(10);
+    let empty = 10usize.saturating_sub(filled);
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+}
+
+fn short_tokens(tokens: usize) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}m", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.0}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
 }

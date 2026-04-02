@@ -29,6 +29,9 @@ Full protocol (JSON-lines over stdin/stdout):
   Request:  {"id":"6","type":"session_summary"}
   Response: {"id":"6","type":"session_summary","text":"..."}
 
+  Request:  {"id":"6b","type":"session_compare","older_session_id":"...","newer_session_id":"..."}
+  Response: {"id":"6b","type":"session_compare","text":"..."}
+
   ── Mission generation ────────────────────────────────────────────────────
   Request:  {"id":"7","type":"generate_mission","focus":""}
   Response: (same chunk/done/error pattern — streams the markdown)
@@ -626,8 +629,15 @@ async def handle_request(
 
     # ── Context: usage breakdown ──────────────────────────────────────────
     elif req_type == "context_usage":
-        breakdown = agent.get_context_breakdown_text()
-        _stream_text(req_id, breakdown)
+        usage = agent.get_context_usage()
+        breakdown = usage.get_usage_breakdown()
+        write_response({
+            "id": req_id,
+            "type": "context_usage",
+            "display": bool(req.get("display", True)),
+            "text": agent.get_context_breakdown_text(),
+            "breakdown": breakdown,
+        })
 
     # ── Context: manual compaction (writes handoff first) ────────────────
     elif req_type == "compact_context":
@@ -652,6 +662,24 @@ async def handle_request(
         else:
             text = "No active session. Run a query or /analyze to start one."
         write_response({"id": req_id, "type": "session_summary", "text": text})
+
+    elif req_type == "session_compare":
+        older_session_id = req.get("older_session_id", "").strip()
+        newer_session_id = req.get("newer_session_id", "").strip()
+        if not older_session_id or not newer_session_id:
+            write_response({
+                "id": req_id,
+                "type": "error",
+                "text": "Usage: session_compare requires older_session_id and newer_session_id",
+            })
+            return
+
+        sm = SessionManager(root)
+        try:
+            text = sm.compare_sessions(older_session_id, newer_session_id)
+            write_response({"id": req_id, "type": "session_compare", "text": text})
+        except FileNotFoundError as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
 
     # ── Graph: stats summary ──────────────────────────────────────────────
     elif req_type == "graph_stats":

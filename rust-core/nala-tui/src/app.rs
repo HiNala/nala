@@ -11,6 +11,7 @@ use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{DefaultTerminal, Frame};
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -112,6 +113,11 @@ pub enum BackgroundEvent {
     AssistantChunk(String),
     AssistantDone,
     AssistantError(String),
+    ContextUsageUpdated {
+        utilization_pct: f64,
+        total_tokens: usize,
+        effective_limit: usize,
+    },
     BridgeReady {
         has_llm: bool,
         provider: String,
@@ -165,8 +171,13 @@ pub struct App {
     pub lsp_server_name: String,
     pub lsp_handle: Option<nala_lsp::LspHandle>,
     pub diagnostics_store: DiagnosticsStore,
+    pub context_utilization_pct: f64,
+    pub context_total_tokens: usize,
+    pub context_effective_limit: usize,
     pub scroll_offset: usize,
     pub tab_index: Option<usize>,
+    pub dashboard_process: Option<Child>,
+    pub dashboard_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -212,8 +223,13 @@ impl App {
             lsp_server_name: String::new(),
             lsp_handle: None,
             diagnostics_store: DiagnosticsStore::new(),
+            context_utilization_pct: 0.0,
+            context_total_tokens: 0,
+            context_effective_limit: 0,
             scroll_offset: 0,
             tab_index: None,
+            dashboard_process: None,
+            dashboard_port: None,
         })
     }
 
@@ -226,12 +242,27 @@ impl App {
         self.scroll_offset = 0;
     }
 
+    pub(crate) fn refresh_context_usage(&self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.context_usage_silent().await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
     // ── Main loop ──────────────────────────────────────────────────────────
 
     pub async fn run(&mut self) -> Result<()> {
         let mut terminal = ratatui::init();
         self.start_python_bridge().await;
         let result = self.event_loop(&mut terminal).await;
+        self.cleanup_dashboard_process();
         ratatui::restore();
         result
     }
@@ -590,6 +621,7 @@ impl App {
                 if let Some(text) = self.streaming_response.take() {
                     self.push_message(Message::assistant(text));
                 }
+                self.refresh_context_usage();
             }
             BackgroundEvent::AssistantError(e) => {
                 self.mode = AppMode::Ready;
@@ -601,6 +633,15 @@ impl App {
                 self.push_message(Message::error(format!(
                     "AI request failed: {}. Check your API key in .env and try again.", e
                 )));
+            }
+            BackgroundEvent::ContextUsageUpdated {
+                utilization_pct,
+                total_tokens,
+                effective_limit,
+            } => {
+                self.context_utilization_pct = utilization_pct;
+                self.context_total_tokens = total_tokens;
+                self.context_effective_limit = effective_limit;
             }
             BackgroundEvent::BridgeReady { has_llm, provider, model } => {
                 self.llm_available = has_llm;
@@ -623,6 +664,7 @@ impl App {
                         });
                     }
                 }
+                self.refresh_context_usage();
             }
             BackgroundEvent::ProposedAction {
                 action_id,
@@ -736,6 +778,14 @@ impl App {
                 }
             }
         }
+    }
+
+    fn cleanup_dashboard_process(&mut self) {
+        if let Some(mut child) = self.dashboard_process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.dashboard_port = None;
     }
 }
 

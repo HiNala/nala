@@ -4,6 +4,9 @@
 //! the event loop and state transitions.
 
 use crate::app::{App, AppMode, BackgroundEvent, Message};
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 impl App {
     pub(crate) fn handle_slash_command(&mut self, cmd: &str) {
@@ -81,6 +84,10 @@ impl App {
                 let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
                 self.compact_context(focus);
             }
+            "/dashboard" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.handle_dashboard_command(args);
+            }
             "/graph" => self.graph_stats(),
             "/team" => {
                 let args = parts.get(1).copied().unwrap_or("").trim();
@@ -142,6 +149,7 @@ impl App {
             "  /session               — list past sessions\n",
             "  /session new           — start a fresh session\n",
             "  /session load <id>     — resume a past session\n",
+            "  /session compare <a> <b> — compare two saved sessions\n",
             "  /session summary       — show current session summary\n",
             "  /generate              — generate a mission doc from findings\n",
             "  /generate <focus>      — generate focused on a topic\n",
@@ -151,6 +159,9 @@ impl App {
             "  /context               — show context window usage breakdown\n",
             "  /compact               — compact context window to free tokens\n",
             "  /compact <focus>       — compact while preserving focus topic\n",
+            "  /dashboard             — start the local dashboard on port 3000\n",
+            "  /dashboard stop        — stop the running dashboard\n",
+            "  /dashboard status      — show dashboard status\n",
             "  /diag                  — show LSP diagnostics summary\n",
             "  /diag errors           — show only errors\n",
             "  /diag warnings         — show only warnings\n",
@@ -317,8 +328,9 @@ impl App {
     }
 
     fn handle_session_command(&mut self, args: &str) {
-        let sub: Vec<&str> = args.splitn(2, ' ').collect();
-        match sub[0] {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        let subcommand = parts.first().copied().unwrap_or("");
+        match subcommand {
             "" => {
                 let Some(bridge) = self.python_bridge.clone() else {
                     self.push_message(Message::system("AI bridge not ready."));
@@ -350,7 +362,7 @@ impl App {
                 });
             }
             "load" => {
-                let session_id = sub.get(1).copied().unwrap_or("").trim().to_string();
+                let session_id = parts.get(1).copied().unwrap_or("").trim().to_string();
                 if session_id.is_empty() {
                     self.push_message(Message::error("Usage: /session load <session_id>"));
                     return;
@@ -366,6 +378,32 @@ impl App {
                 )));
                 tokio::spawn(async move {
                     if let Err(e) = bridge.load_session(session_id).await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+            "compare" => {
+                let older = parts.get(1).copied().unwrap_or("").trim().to_string();
+                let newer = parts.get(2).copied().unwrap_or("").trim().to_string();
+                if older.is_empty() || newer.is_empty() {
+                    self.push_message(Message::error(
+                        "Usage: /session compare <older_id> <newer_id>",
+                    ));
+                    return;
+                }
+                let Some(bridge) = self.python_bridge.clone() else {
+                    self.push_message(Message::system("AI bridge not ready."));
+                    return;
+                };
+                let tx = self.bg_tx.clone();
+                self.push_message(Message::system(format!(
+                    "Comparing sessions {} -> {}...",
+                    older, newer
+                )));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.session_compare(older, newer).await {
                         let _ = tx
                             .send(BackgroundEvent::AssistantError(e.to_string()))
                             .await;
@@ -388,9 +426,33 @@ impl App {
             }
             _ => {
                 self.push_message(Message::error(format!(
-                    "Unknown session subcommand: '{}'. Use: list, new, load <id>, summary.",
-                    sub[0]
+                    "Unknown session subcommand: '{}'. Use: list, new, load <id>, compare <a> <b>, summary.",
+                    subcommand
                 )));
+            }
+        }
+    }
+
+    fn handle_dashboard_command(&mut self, args: &str) {
+        match args {
+            "" | "start" => self.start_dashboard(3000),
+            "stop" => self.stop_dashboard(),
+            "status" => self.show_dashboard_status(),
+            other => {
+                if let Some(port_str) = other.strip_prefix("start ") {
+                    match port_str.trim().parse::<u16>() {
+                        Ok(port) => self.start_dashboard(port),
+                        Err(_) => self.push_message(Message::error(
+                            "Usage: /dashboard [start <port>] | stop | status",
+                        )),
+                    }
+                } else if let Ok(port) = other.parse::<u16>() {
+                    self.start_dashboard(port);
+                } else {
+                    self.push_message(Message::error(
+                        "Usage: /dashboard [start <port>] | stop | status",
+                    ));
+                }
             }
         }
     }
@@ -437,6 +499,136 @@ impl App {
                     .await;
             }
         });
+    }
+
+    fn start_dashboard(&mut self, port: u16) {
+        if self.dashboard_is_running() {
+            let current_port = self.dashboard_port.unwrap_or(port);
+            self.push_message(Message::system(format!(
+                "Dashboard already running at http://127.0.0.1:{}",
+                current_port
+            )));
+            return;
+        }
+
+        let Some(repo_root) = self.resolve_dashboard_repo_root() else {
+            self.push_message(Message::error(
+                "Could not find the dashboard files. Expected `dashboard/server.py` in this repo.",
+            ));
+            return;
+        };
+
+        let root_for_env = self.project_root.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+        let mut last_error = None;
+        for python_cmd in dashboard_python_candidates(&repo_root) {
+            let mut cmd = Command::new(&python_cmd);
+            if python_cmd.file_name().and_then(|s| s.to_str()) == Some("py") {
+                cmd.args([
+                    "-3",
+                    "-m",
+                    "uvicorn",
+                    "dashboard.server:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    &port.to_string(),
+                ]);
+            } else {
+                cmd.args([
+                    "-m",
+                    "uvicorn",
+                    "dashboard.server:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    &port.to_string(),
+                ]);
+            }
+
+            match cmd
+                .env("DASHBOARD_PORT", port.to_string())
+                .env("NALA_PROJECT_ROOT", &root_for_env)
+                .current_dir(&repo_root)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => {
+                    self.dashboard_process = Some(child);
+                    self.dashboard_port = Some(port);
+                    let url = format!("http://127.0.0.1:{}", port);
+                    self.push_message(Message::system(format!("Dashboard started: {}", url)));
+                    open_dashboard_in_browser(&url);
+                    return;
+                }
+                Err(e) => last_error = Some((python_cmd.display().to_string(), e.to_string())),
+            }
+        }
+
+        if let Some((cmd, err)) = last_error {
+            self.push_message(Message::error(format!(
+                "Failed to start dashboard via '{}': {}. Install `uvicorn` and `fastapi` in your Python env.",
+                cmd, err
+            )));
+        }
+    }
+
+    fn stop_dashboard(&mut self) {
+        if let Some(mut child) = self.dashboard_process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let port = self.dashboard_port.take().unwrap_or(3000);
+            self.push_message(Message::system(format!(
+                "Dashboard stopped (port {}).",
+                port
+            )));
+        } else {
+            self.push_message(Message::system("Dashboard is not running."));
+        }
+    }
+
+    fn show_dashboard_status(&mut self) {
+        if self.dashboard_is_running() {
+            let port = self.dashboard_port.unwrap_or(3000);
+            self.push_message(Message::assistant(format!(
+                "Dashboard is running at http://127.0.0.1:{}",
+                port
+            )));
+        } else {
+            self.push_message(Message::assistant(
+                "Dashboard is not running. Use `/dashboard` to start it.",
+            ));
+        }
+    }
+
+    fn dashboard_is_running(&mut self) -> bool {
+        let Some(child) = self.dashboard_process.as_mut() else {
+            return false;
+        };
+
+        match child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(_)) | Err(_) => {
+                self.dashboard_process = None;
+                self.dashboard_port = None;
+                false
+            }
+        }
+    }
+
+    fn resolve_dashboard_repo_root(&self) -> Option<PathBuf> {
+        let mut candidates = vec![self.project_root.clone()];
+        if let Ok(exe) = env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                candidates.push(dir.join("..").join("..").join(".."));
+            }
+        }
+
+        candidates
+            .into_iter()
+            .map(|p| p.canonicalize().unwrap_or(p))
+            .find(|root| root.join("dashboard").join("server.py").exists())
     }
 
     pub(crate) fn doctor(&mut self) {
@@ -700,4 +892,59 @@ impl App {
             }
         });
     }
+}
+
+fn dashboard_python_candidates(repo_root: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(explicit) = env::var("NALA_PYTHON") {
+        if !explicit.trim().is_empty() {
+            candidates.push(PathBuf::from(explicit));
+        }
+    }
+
+    #[cfg(windows)]
+    candidates.push(repo_root.join(".venv").join("Scripts").join("python.exe"));
+    #[cfg(not(windows))]
+    candidates.push(repo_root.join(".venv").join("bin").join("python"));
+
+    if let Ok(venv) = env::var("VIRTUAL_ENV") {
+        #[cfg(windows)]
+        candidates.push(PathBuf::from(&venv).join("Scripts").join("python.exe"));
+        #[cfg(not(windows))]
+        candidates.push(PathBuf::from(&venv).join("bin").join("python"));
+    }
+
+    #[cfg(windows)]
+    candidates.extend([PathBuf::from("python"), PathBuf::from("py")]);
+    #[cfg(not(windows))]
+    candidates.extend([PathBuf::from("python3"), PathBuf::from("python")]);
+
+    candidates
+}
+
+fn open_dashboard_in_browser(url: &str) {
+    #[cfg(windows)]
+    let _ = Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = Command::new("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
