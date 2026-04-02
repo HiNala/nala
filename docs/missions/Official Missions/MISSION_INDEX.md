@@ -61,6 +61,8 @@ Then execute missions in order. Each mission is self-contained with objectives, 
 
 **Phase 6D - Terminal Orchestration (Missions 32-36)**: Formalize the interpreter-orchestrator-worker model, spawn and manage worker terminals, add deeper git/worktree support, integrate live web research, and design the full human-in-the-loop orchestration experience.
 
+**Phase 7 - Multi-Model, Orchestration, And Settings (separate folder: `Phase7_MultiModel_Orchestration_Settings/`)**: Build the multi-model registry and intelligent task-type routing (P7-01), the mission-driven orchestration execution engine with git management (P7-02), the user settings and configuration experience (P7-03), and the integration/polish/end-to-end validation pass (P7-04). These missions are designed to be executed after Missions 27-31 establish the `/agent` runtime, but can be developed in parallel where dependencies allow.
+
 ## Tech Stack Quick Reference
 
 | Layer | Language | Key Libraries |

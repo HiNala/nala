@@ -110,97 +110,57 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 
 ### Commands inside Nala
 
-**Agent Workflow** (primary autonomous entrypoint):
+Just type a question or instruction to chat with the AI. All slash commands:
+
+**Agent** — autonomous workflow:
 
 | Command | Description |
 |---------|-------------|
-| `/agent` | Show agent help and current run status |
-| `/agent <objective>` | Start an objective-driven agent run |
-| `/agent plan [topic]` | Create or refresh a plan without executing |
+| `/agent <objective>` | Start an autonomous agent run |
+| `/agent plan [topic]` | Generate a plan |
+| `/agent approve` / `reject` | Accept or revise the plan |
 | `/agent run` | Execute the approved plan |
-| `/agent review` | Review current diff and pending changes |
-| `/agent verify` | Run verification analysis |
-| `/agent hotspot` | Quick hotspot triage for high-value work |
-| `/agent status` | Show objective, phase, tasks, git state |
-| `/agent approve` | Approve the pending plan and start execution |
-| `/agent reject` | Reject the pending plan (revise with `/agent plan`) |
-| `/agent stop` | Cancel the active run |
-| `/agent resume` | Resume a paused or blocked run |
-| `/agent mode <level>` | Set autonomy: `observe`, `plan`, `patch`, `autonomous` |
+| `/agent review` | Review changes and diff |
+| `/agent verify` | Run tests and linting |
+| `/agent status` | Current run state |
+| `/agent stop` / `pause` / `resume` | Control the run |
+| `/agent scm` | Git status overview |
+| `/agent research <q>` | Look up external docs |
+| `/agent next` | Suggested next steps |
 
-**Workers (Multi-Agent):**
+**Code:**
 
 | Command | Description |
 |---------|-------------|
-| `/agent workers` | List active workers |
-| `/agent attach <id>` | Inspect a worker's context |
-| `/agent detach` | Return to main interpreter |
-| `/agent message <id> <text>` | Send a message to a worker |
-| `/agent cancel-worker <id>` | Cancel a running worker |
+| `/analyze [quick]` | Run analysis perspectives |
+| `/scope <path>` | Focus on a subtree |
+| `/read <file>` | Show file contents |
+| `/tree` | Project file tree |
+| `/diag` | LSP diagnostics |
 
-**SCM / Git Integration:**
-
-| Command | Description |
-|---------|-------------|
-| `/agent scm` | Full SCM overview (branch, dirty state, worktrees) |
-| `/agent compare [base] [head]` | Branch comparison summary |
-| `/agent blame <file> [start] [end]` | Git blame summary |
-| `/agent worktree list` | List active worktrees |
-| `/agent worktree create <label>` | Create an isolated worktree for a worker |
-| `/agent worktree cleanup <label>` | Remove a worktree and its branch |
-
-**Research:**
+**Session:**
 
 | Command | Description |
 |---------|-------------|
-| `/agent research <question>` | Bounded web research with cited outputs |
+| `/session` | List / create / load sessions |
+| `/context` | Context window usage |
+| `/compact` | Free tokens by compacting |
 
-**Control (Human-in-the-Loop):**
-
-| Command | Description |
-|---------|-------------|
-| `/agent pause` | Pause the current agent run |
-| `/agent checkpoint [label]` | Save a checkpoint of current state |
-| `/agent checkpoints` | List saved checkpoints |
-| `/agent restore <index>` | Restore to a saved checkpoint |
-| `/agent next` | Show context-appropriate next-step suggestions |
-
-**Code Intelligence:**
+**Settings:**
 
 | Command | Description |
 |---------|-------------|
-| `/analyze` | Run analysis perspectives (`quick`, `all`, or by name) |
-| `/scope <path>` | Focus analysis on a subtree (`/scope clear` to reset) |
-| `/def`, `/refs`, `/hover` | LSP go-to-definition, find-references, hover docs |
-| `/diag` | Show LSP diagnostics (errors/warnings) |
-| `/graph` | Code graph statistics |
-| `/read <file>` | Display file contents in chat |
-| `/tree` / `/files` | Show project file tree |
-
-**Session & Memory:**
-
-| Command | Description |
-|---------|-------------|
-| `/session` | List, create, load, or compare sessions |
-| `/memory` | Show memory summary or forget entries |
-| `/context` | Show context window usage breakdown |
-| `/compact` | Compact context to free tokens |
-| `/handoff` | Session handoff documents |
-
-**Utilities:**
-
-| Command | Description |
-|---------|-------------|
-| `/scan` / `/index` | Scan files or full index (parse + symbols) |
-| `/generate` | Generate mission doc from findings |
-| `/dashboard` | Start/stop local dashboard |
-| `/undo` | Revert last applied actions |
+| `/model` | Show or switch LLM provider/model |
 | `/doctor` | Environment diagnostics |
+
+**General:**
+
+| Command | Description |
+|---------|-------------|
+| `/scan` / `/index` | Rescan or reindex project files |
+| `/clear` | Clear messages |
 | `/help` | Full command reference |
 | `/quit` | Exit |
-| *Any other text* | Ask the AI assistant |
-
-> **Deprecated aliases:** `/brain`, `/act`, `/task`, `/team`, `/diff`, `/branch`, `/status` still work but route to `/agent` with a migration hint.
 
 ### Key Bindings
 
@@ -240,12 +200,10 @@ hinala -p /path/to/any/project
 
 1. Launch the TUI — it auto-scans and indexes on boot
 2. Wait for "Index complete" message (usually < 1 second)
-3. Type `/doctor` to verify environment health
-4. Type `/help` to see all commands
-5. Type `/analyze` to run a full analysis (security, complexity, churn, etc.)
-6. Press `Ctrl+B` to open the file tree panel
-7. Ask a natural language question: `What are the main entry points in this project?`
-8. Type `/act refactor the largest function into smaller helpers` to try AI-driven edits
+3. Type `/model` to verify your LLM connection
+4. Ask a question: `What are the main entry points in this project?`
+5. Type `/analyze` for a full analysis
+6. Type `/agent <goal>` to start an autonomous agent run
 
 ### Without the global command
 

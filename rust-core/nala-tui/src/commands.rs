@@ -34,6 +34,45 @@ impl App {
                 let perspective = parts.get(1).copied().unwrap_or("all").to_string();
                 self.run_perspectives(perspective);
             }
+            "/model" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                if args.is_empty() {
+                    let provider = if self.llm_provider.is_empty() {
+                        "none".to_string()
+                    } else {
+                        self.llm_provider.clone()
+                    };
+                    let model = if self.llm_model.is_empty() {
+                        "not set".to_string()
+                    } else {
+                        self.llm_model.clone()
+                    };
+                    let avail = if self.llm_available { "connected" } else { "offline" };
+                    self.push_message(Message::assistant(&format!(
+                        "## Current Model\n\n\
+                         **Provider:** {}\n\
+                         **Model:** {}\n\
+                         **Status:** {}\n\n\
+                         To change, edit your `.env` file:\n\
+                         ```\n\
+                         LLM_PROVIDER=openai        # or: anthropic, google, ollama\n\
+                         OPENAI_API_KEY=sk-...       # your API key\n\
+                         OPENAI_MODEL=gpt-4o         # optional model override\n\
+                         ```\n\n\
+                         Supported providers:\n\
+                         - `anthropic` — Claude (default model: claude-sonnet-4-6)\n\
+                         - `openai` — GPT-4o, o1, etc.\n\
+                         - `google` — Gemini\n\
+                         - `ollama` — Local models (no API key needed)\n\n\
+                         Restart Nala after changing `.env`.",
+                        provider, model, avail,
+                    )));
+                } else {
+                    self.push_message(Message::system(
+                        "To switch models, edit LLM_PROVIDER and the matching API key in your `.env` file, then restart Nala.",
+                    ));
+                }
+            }
             "/scope" => {
                 let args = parts.get(1).copied().unwrap_or("").trim().to_string();
                 self.set_analysis_scope(args);
@@ -76,74 +115,21 @@ impl App {
                 let args = parts.get(1).copied().unwrap_or("").trim();
                 self.handle_agent_command(args);
             }
-            // ── Deprecated aliases → route to /agent with hint ───────────
-            "/act" => {
-                let query = parts.get(1).copied().unwrap_or("").trim().to_string();
-                self.push_message(Message::system(
-                    "Hint: /act is now /agent <instruction>. Routing for you.",
-                ));
-                if query.is_empty() {
-                    self.push_message(Message::error("Usage: /agent <instruction>"));
+            // ── Deprecated aliases → silent redirect ───────────────────
+            "/act" | "/brain" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                if args.is_empty() {
+                    self.push_message(Message::system(
+                        "This command has moved to `/agent`. Try `/agent <objective>` or `/agent` for help.",
+                    ));
                 } else {
-                    self.handle_agent_command(&query);
+                    self.handle_agent_command(args);
                 }
             }
-            "/task" => {
-                let args = parts.get(1).copied().unwrap_or("").trim();
+            "/task" | "/team" | "/diff" | "/branch" | "/status" => {
                 self.push_message(Message::system(
-                    "Hint: /task is now part of /agent. Routing for you.",
+                    "This command has moved to `/agent`. Use `/agent status`, `/agent review`, or `/agent scm`.",
                 ));
-                match args {
-                    "" | "status" => self.task_status(),
-                    "list" => self.task_list(),
-                    "done" => self.task_done(String::new()),
-                    _ => {
-                        if args.starts_with("done ") {
-                            self.task_done(args.strip_prefix("done ").unwrap_or("").to_string());
-                        } else {
-                            self.task_create(args.to_string());
-                        }
-                    }
-                }
-            }
-            "/team" => {
-                let args = parts.get(1).copied().unwrap_or("").trim();
-                self.push_message(Message::system(
-                    "Hint: /team is now internal to /agent. Routing for you.",
-                ));
-                match args {
-                    "status" => self.team_status(),
-                    "cancel" => self.team_cancel(),
-                    "" => self.push_message(Message::error(
-                        "Usage: /agent <objective>  |  /agent status  |  /agent stop",
-                    )),
-                    objective => self.team_start(objective.to_string()),
-                }
-            }
-            "/brain" => {
-                let args = parts.get(1).copied().unwrap_or("").trim();
-                self.push_message(Message::system(
-                    "Hint: /brain is now /agent. Routing for you.",
-                ));
-                self.handle_agent_command(args);
-            }
-            "/diff" => {
-                self.push_message(Message::system(
-                    "Hint: /diff is now /agent review. Routing for you.",
-                ));
-                self.git_diff();
-            }
-            "/branch" => {
-                self.push_message(Message::system(
-                    "Hint: /branch is now part of /agent status. Routing for you.",
-                ));
-                self.git_branch();
-            }
-            "/status" => {
-                self.push_message(Message::system(
-                    "Hint: /status is now /agent status. Routing for you.",
-                ));
-                self.git_status();
             }
             // ── Stable commands ──────────────────────────────────────────
             "/context" => self.show_context_usage(),
@@ -193,54 +179,45 @@ impl App {
 
     fn show_help(&mut self) {
         self.push_message(Message::assistant(concat!(
-            "## Agent Workflow\n",
-            "  /agent                 — show agent help and current run status\n",
-            "  /agent <objective>     — start objective-driven agent run\n",
-            "  /agent plan [topic]    — create or refresh a plan\n",
-            "  /agent run             — execute the current plan\n",
-            "  /agent review          — review current diff and pending changes\n",
-            "  /agent verify          — run verification analysis\n",
-            "  /agent hotspot         — quick hotspot triage\n",
-            "  /agent status          — show objective, phase, tasks, git state\n",
-            "  /agent stop            — cancel the active run\n\n",
-            "## Code Intelligence\n",
-            "  /analyze               — run all analysis perspectives\n",
-            "  /analyze quick         — fast subset (complexity/security/dependency)\n",
-            "  /scope <path>          — focus analysis on a subtree\n",
-            "  /def <file:l:c>        — LSP go-to-definition\n",
-            "  /refs <file:l:c>       — LSP find-references\n",
-            "  /hover <file:l:c>      — LSP hover docs\n",
-            "  /diag                  — show LSP diagnostics\n",
-            "  /graph                 — code graph statistics\n",
-            "  /read <file>           — display file contents in chat\n",
-            "  /tree                  — show project file tree\n\n",
-            "## Session & Memory\n",
-            "  /session               — list past sessions\n",
-            "  /session new           — start a fresh session\n",
-            "  /session load <id>     — resume a past session\n",
-            "  /memory                — show memory summary\n",
-            "  /context               — show context window usage\n",
-            "  /compact               — compact context to free tokens\n",
-            "  /handoff               — show session handoff document\n\n",
-            "## Utilities\n",
-            "  /scan                  — quick file scan (hash-only)\n",
-            "  /index                 — full index (parse + symbols)\n",
-            "  /generate              — generate mission doc from findings\n",
-            "  /dashboard             — start local dashboard\n",
-            "  /undo                  — revert last applied actions\n",
-            "  /doctor                — environment diagnostics\n",
+            "## Nala Commands\n\n",
+            "**Ask anything** — just type a question or instruction.\n\n",
+            "### Agent\n",
+            "  /agent <objective>     — start an autonomous agent run\n",
+            "  /agent plan [topic]    — generate a plan\n",
+            "  /agent approve / reject — approve or reject the plan\n",
+            "  /agent run             — execute the approved plan\n",
+            "  /agent review          — review changes and diff\n",
+            "  /agent verify          — run project tests/linting\n",
+            "  /agent status          — show current run state\n",
+            "  /agent stop            — cancel the run\n",
+            "  /agent pause / resume  — pause or resume\n",
+            "  /agent scm             — git status overview\n",
+            "  /agent research <q>    — look up external docs\n",
+            "  /agent next            — show suggested next steps\n\n",
+            "### Code\n",
+            "  /analyze [quick]       — run analysis perspectives\n",
+            "  /scope <path>          — focus on a subtree\n",
+            "  /read <file>           — show file contents\n",
+            "  /tree                  — project file tree\n",
+            "  /diag                  — LSP diagnostics\n\n",
+            "### Session\n",
+            "  /session               — list / create / load sessions\n",
+            "  /context               — context window usage\n",
+            "  /compact               — free tokens by compacting\n\n",
+            "### Settings\n",
+            "  /model                 — show or switch LLM provider/model\n",
+            "  /doctor                — environment diagnostics\n\n",
+            "### General\n",
+            "  /scan / /index         — rescan or reindex project files\n",
             "  /clear                 — clear messages\n",
             "  /help                  — this help\n",
             "  /quit                  — exit\n\n",
-            "## Key Bindings\n",
-            "  Up/Down arrows         — cycle command history\n",
-            "  Shift+Up/Down          — scroll messages\n",
-            "  PgUp/PgDn              — scroll messages (larger jump)\n",
-            "  Mouse wheel            — scroll messages\n",
-            "  Ctrl+B                 — toggle file panel\n",
-            "  Ctrl+E                 — toggle session panel\n",
-            "  Esc                    — cancel / clear input\n\n",
-            "Or just type a question to ask the AI.",
+            "### Keys\n",
+            "  Up/Down                — command history\n",
+            "  Shift+Up/Down, PgUp/Dn, Mouse wheel — scroll\n",
+            "  Ctrl+B / Ctrl+E       — file / session panels\n",
+            "  Ctrl+G                — agent workbench panel\n",
+            "  Tab                   — autocomplete commands\n",
         )));
     }
 
@@ -946,57 +923,6 @@ impl App {
         self.push_message(Message::assistant(lines.join("\n")));
     }
 
-    fn team_start(&mut self, objective: String) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        self.mode = AppMode::Analyzing;
-        self.push_message(Message::system(format!(
-            "Starting agent team: {}...",
-            &objective[..objective.len().min(60)]
-        )));
-        tokio::spawn(async move {
-            if let Err(e) = bridge.team_start(objective).await {
-                let _ = tx
-                    .send(BackgroundEvent::AssistantError(e.to_string()))
-                    .await;
-            }
-        });
-    }
-
-    fn team_status(&mut self) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = bridge.team_status().await {
-                let _ = tx
-                    .send(BackgroundEvent::AssistantError(e.to_string()))
-                    .await;
-            }
-        });
-    }
-
-    fn team_cancel(&mut self) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        self.push_message(Message::system("Cancelling team run..."));
-        tokio::spawn(async move {
-            if let Err(e) = bridge.team_cancel().await {
-                let _ = tx
-                    .send(BackgroundEvent::AssistantError(e.to_string()))
-                    .await;
-            }
-        });
-    }
-
     fn handoff_save(&mut self) {
         let Some(bridge) = self.python_bridge.clone() else {
             self.push_message(Message::system("AI bridge not ready."));
@@ -1110,104 +1036,6 @@ impl App {
         });
     }
 
-    // ── Git commands ───────────────────────────────────────────────────
-
-    fn git_diff(&mut self) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        self.push_message(Message::system("Fetching diff..."));
-        tokio::spawn(async move {
-            if let Err(e) = bridge.git_diff().await {
-                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
-            }
-        });
-    }
-
-    fn git_branch(&mut self) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        self.push_message(Message::system("Fetching branch info..."));
-        tokio::spawn(async move {
-            if let Err(e) = bridge.git_branch().await {
-                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
-            }
-        });
-    }
-
-    fn git_status(&mut self) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        self.push_message(Message::system("Fetching git status..."));
-        tokio::spawn(async move {
-            if let Err(e) = bridge.git_status().await {
-                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
-            }
-        });
-    }
-
-    // ── Task commands ──────────────────────────────────────────────────
-
-    fn task_create(&mut self, objective: String) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = bridge.task_create(objective).await {
-                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
-            }
-        });
-    }
-
-    fn task_status(&mut self) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = bridge.task_status().await {
-                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
-            }
-        });
-    }
-
-    fn task_list(&mut self) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = bridge.task_list().await {
-                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
-            }
-        });
-    }
-
-    fn task_done(&mut self, summary: String) {
-        let Some(bridge) = self.python_bridge.clone() else {
-            self.push_message(Message::system("AI bridge not ready."));
-            return;
-        };
-        let tx = self.bg_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = bridge.task_done(summary).await {
-                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
-            }
-        });
-    }
-
     fn handle_agent_command(&mut self, args: &str) {
         let mut parts = args.splitn(2, ' ');
         let sub = parts.next().unwrap_or("").trim();
@@ -1217,43 +1045,22 @@ impl App {
             "" | "help" => {
                 self.push_message(Message::assistant(
                     "## /agent — Autonomous Workflow\n\n\
-                     **Quick start:** `/agent <objective>` to begin an objective-driven run.\n\n\
-                     **Subcommands:**\n\
-                     - `/agent <objective>`  — start an objective-driven agent run\n\
-                     - `/agent plan [topic]` — create or refresh a plan without executing\n\
-                     - `/agent run`          — execute the current plan\n\
-                     - `/agent review`       — review current diff and pending changes\n\
-                     - `/agent verify`       — run verification analysis\n\
-                     - `/agent hotspot`      — quick hotspot triage to find high-value work\n\
-                     - `/agent approve`      — approve the pending plan\n\
-                     - `/agent reject`       — reject the pending plan\n\
-                     - `/agent status`       — show objective, phase, tasks, git state\n\
-                     - `/agent stop`         — cancel the active run\n\
-                     - `/agent resume`       — resume a paused or blocked run\n\
-                     - `/agent mode <level>` — set autonomy: observe, plan, patch, autonomous\n\n\
-                     **Workers:**\n\
-                     - `/agent workers`                  — list active workers\n\
-                     - `/agent attach <worker-id>`       — inspect a worker's context\n\
-                     - `/agent detach`                   — return to interpreter\n\
-                     - `/agent message <id> <text>`      — send a message to a worker\n\
-                     - `/agent cancel-worker <id>`       — cancel a running worker\n\n\
-                     **SCM / Git:**\n\
-                     - `/agent scm`                      — full SCM overview\n\
-                     - `/agent compare [base] [head]`    — branch comparison\n\
-                     - `/agent blame <file> [s] [e]`     — git blame summary\n\
-                     - `/agent worktree list`            — list worktrees\n\
-                     - `/agent worktree create <label>`  — create an isolated worktree\n\
-                     - `/agent worktree cleanup <label>` — remove a worktree\n\n\
-                     **Research:**\n\
-                     - `/agent research <question>`      — web research with cited outputs\n\n\
-                     **Control:**\n\
-                     - `/agent pause`                    — pause the current run\n\
-                     - `/agent checkpoint [label]`       — save a checkpoint\n\
-                     - `/agent checkpoints`              — list saved checkpoints\n\
-                     - `/agent restore <index>`          — restore to a checkpoint\n\
-                     - `/agent next`                     — show next-step suggestions\n\n\
-                     **Workflow:** plan → approve → run → review → verify → done.\n\
-                     **Keybindings:** `Ctrl+G` toggles the agent workbench panel.",
+                     **Quick start:** `/agent <objective>`\n\n\
+                     **Core workflow:**\n\
+                     - `plan [topic]` — generate a plan\n\
+                     - `approve` / `reject` — accept or revise the plan\n\
+                     - `run` — execute the plan\n\
+                     - `review` — review changes\n\
+                     - `verify` — run tests/linting\n\
+                     - `status` — current state\n\
+                     - `stop` / `pause` / `resume` — control the run\n\n\
+                     **More:**\n\
+                     - `scm` — git overview  |  `research <q>` — look up docs\n\
+                     - `workers` — list workers  |  `next` — suggested steps\n\
+                     - `mode <level>` — autonomy: observe, plan, patch, autonomous\n\
+                     - `checkpoint` / `checkpoints` / `restore` — save/load state\n\n\
+                     **Flow:** plan → approve → run → review → verify → done\n\
+                     **Panel:** `Ctrl+G` toggles agent workbench",
                 ));
             }
             "plan" => {

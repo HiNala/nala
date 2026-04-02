@@ -166,22 +166,22 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                 .fg(theme::GREEN)
                 .add_modifier(Modifier::BOLD),
         )));
-        lines.push(tip_line("  1. ", "Ask questions or give instructions"));
-        lines.push(tip_line("  2. ", "/analyze to run code analysis"));
-        lines.push(tip_line("  3. ", "/help for all commands"));
-        lines.push(tip_line("  4. ", "/scope path/ to focus on a dir"));
+        lines.push(tip_line("  · ", "Type a question or instruction to chat"));
+        lines.push(tip_line("  · ", "/agent <goal> to start an autonomous run"));
+        lines.push(tip_line("  · ", "/model to check your LLM connection"));
+        lines.push(tip_line("  · ", "/help for all commands"));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Shortcuts",
+        "  Keys",
         Style::default()
             .fg(theme::GREEN)
             .add_modifier(Modifier::BOLD),
     )));
-    lines.push(shortcut_line("  Ctrl+B  ", "toggle file panel"));
-    lines.push(shortcut_line("  Ctrl+E  ", "toggle session panel"));
     lines.push(shortcut_line("  Tab     ", "autocomplete commands"));
+    lines.push(shortcut_line("  Ctrl+B  ", "file panel"));
+    lines.push(shortcut_line("  Ctrl+G  ", "agent panel"));
     lines.push(shortcut_line("  Ctrl+C  ", "quit"));
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
@@ -243,15 +243,11 @@ fn render_compact(
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  /help for commands",
+        "  Type a question or /help for commands",
         Style::default().fg(theme::WHITE),
     )));
     lines.push(Line::from(Span::styled(
-        "  /analyze for code analysis",
-        Style::default().fg(theme::WHITE),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  Ctrl+B files  Ctrl+E sessions",
+        "  Tab autocomplete  Ctrl+B files  Ctrl+G agent",
         Style::default().fg(theme::GRAY),
     )));
 
