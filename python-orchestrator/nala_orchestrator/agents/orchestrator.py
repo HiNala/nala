@@ -305,7 +305,10 @@ class AgentOrchestrator:
             return response.content
         except Exception as e:
             logger.error("LLM query failed: %s", e)
-            return f"Error: {e}"
+            error_msg = f"Error: {e}"
+            self.context.add_assistant(error_msg)
+            session.append_turn("assistant_error", error_msg)
+            return error_msg
 
     async def stream_query_with_actions(self, user_message: str) -> AsyncIterator[str]:
         """
@@ -327,6 +330,7 @@ class AgentOrchestrator:
 
         action_system = self.build_system_prompt(user_message) + ACTION_PROMPT_EXTENSION
         full_response: list[str] = []
+        had_error = False
         try:
             provider = self._get_provider()
             async for chunk in provider.stream_chat(
@@ -337,12 +341,14 @@ class AgentOrchestrator:
                 yield chunk
         except Exception as e:
             logger.error("LLM streaming failed: %s", e)
+            had_error = True
             yield f"\n\nError: {e}"
 
         if full_response:
             assembled = "".join(full_response)
             self.context.add_assistant(assembled)
-            session.append_turn("assistant", assembled)
+            turn_type = "assistant_error" if had_error else "assistant"
+            session.append_turn(turn_type, assembled)
 
     async def stream_query(self, user_message: str) -> AsyncIterator[str]:
         """Stream a response token by token."""
@@ -361,6 +367,7 @@ class AgentOrchestrator:
         session.append_turn("user", user_message)
 
         full_response: list[str] = []
+        had_error = False
         try:
             provider = self._get_provider()
             async for chunk in provider.stream_chat(
@@ -371,9 +378,11 @@ class AgentOrchestrator:
                 yield chunk
         except Exception as e:
             logger.error("LLM streaming failed: %s", e)
+            had_error = True
             yield f"\n\nError: {e}"
 
         if full_response:
             assembled = "".join(full_response)
             self.context.add_assistant(assembled)
-            session.append_turn("assistant", assembled)
+            turn_type = "assistant_error" if had_error else "assistant"
+            session.append_turn(turn_type, assembled)

@@ -33,7 +33,8 @@ impl App {
         };
         let tx = self.bg_tx.clone();
         let id = action.action_id.clone();
-        self.pending_actions.remove(0);
+        self.mode = AppMode::Analyzing;
+        self.push_message(Message::system("Applying action..."));
         tokio::spawn(async move {
             if let Err(e) = bridge.apply_action(id).await {
                 let _ = tx
@@ -41,7 +42,6 @@ impl App {
                     .await;
             }
         });
-        self.show_next_pending_action();
     }
 
     fn skip_next_action(&mut self) {

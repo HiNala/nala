@@ -75,6 +75,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -94,7 +95,7 @@ from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.DEBUG if os.environ.get("NALA_DEBUG") else logging.WARNING,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     stream=sys.stderr,
 )
@@ -120,9 +121,16 @@ def write_response(data: dict) -> None:
 
 
 def _stream_text(req_id: str, text: str, chunk_size: int = 200) -> None:
-    """Stream a long text string as successive chunk messages, then done."""
-    for i in range(0, len(text), chunk_size):
-        write_response({"id": req_id, "type": "chunk", "text": text[i:i + chunk_size]})
+    """Stream a long text string as successive chunk messages, then done.
+
+    Uses character-level slicing (not byte-level) to avoid splitting
+    multi-byte Unicode codepoints.
+    """
+    offset = 0
+    while offset < len(text):
+        end = min(offset + chunk_size, len(text))
+        write_response({"id": req_id, "type": "chunk", "text": text[offset:end]})
+        offset = end
     write_response({"id": req_id, "type": "done"})
 
 
@@ -211,8 +219,8 @@ async def handle_request(
     elif req_type == "run_perspectives":
         project_root_str = req.get("project_root") or str(root)
         perspective_name = req.get("perspective", "all")
+        graph_conn = None
         try:
-            graph_conn = None
             try:
                 from .graph.connection import GraphConnection
 
@@ -237,15 +245,14 @@ async def handle_request(
                 result = await engine.run_one(perspective_name, project_root_str)
                 results = [result] if result else []
 
-            # Save findings to active session
             session = agent.ensure_session()
             session.save_findings(results)
-
             _stream_text(req_id, format_results_as_text(results))
-            if graph_conn is not None:
-                graph_conn.close()
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": f"Analysis error: {e}"})
+        finally:
+            if graph_conn is not None:
+                graph_conn.close()
 
     # ── Generate mission document (streaming) ─────────────────────────────
     elif req_type == "generate_mission":
@@ -518,11 +525,15 @@ async def handle_request(
             return
         try:
             def _fetch_graph_stats() -> str:
-                files = conn.run("MATCH (f:File) RETURN count(f) AS n")[0].get("n", 0)
-                fns = conn.run("MATCH (f:Function) RETURN count(f) AS n")[0].get("n", 0)
-                classes = conn.run("MATCH (c:Class) RETURN count(c) AS n")[0].get("n", 0)
-                mods = conn.run("MATCH (m:Module) RETURN count(m) AS n")[0].get("n", 0)
-                rels = conn.run("MATCH ()-[r]->() RETURN count(r) AS n")[0].get("n", 0)
+                def _count(query: str) -> int:
+                    rows = conn.run(query)
+                    return rows[0].get("n", 0) if rows else 0
+
+                files = _count("MATCH (f:File) RETURN count(f) AS n")
+                fns = _count("MATCH (f:Function) RETURN count(f) AS n")
+                classes = _count("MATCH (c:Class) RETURN count(c) AS n")
+                mods = _count("MATCH (m:Module) RETURN count(m) AS n")
+                rels = _count("MATCH ()-[r]->() RETURN count(r) AS n")
                 cypher, params = find_most_imported_modules()
                 top = conn.run(cypher, **params)[:5]
                 top_lines = "\n".join(
@@ -698,7 +709,7 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
         "version": VERSION,
     })
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
     await loop.connect_read_pipe(lambda: protocol, sys.stdin)

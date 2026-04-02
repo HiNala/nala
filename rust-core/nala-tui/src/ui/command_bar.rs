@@ -26,7 +26,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("> ", Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD)),
             Span::styled(
-                "Type your message or @path/to/file",
+                "Type a question or /help for commands",
                 Style::default().fg(theme::DARK_GRAY),
             ),
         ])

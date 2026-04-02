@@ -1,11 +1,11 @@
 """
 Configuration management for Nala.
 
-Config is loaded from (in order of precedence):
-  1. Environment variables
+Config is loaded from (highest precedence wins):
+  1. Environment variables already set in the process
   2. .env file in the project root
-  3. .env file in the user's home directory (~/.nala/.env)
-  4. Defaults
+  3. .env file in ~/.nala/.env
+  4. Built-in defaults
 
 Usage:
     config = Config.load()
@@ -74,20 +74,35 @@ class Config(BaseModel):
 
     @classmethod
     def load(cls, project_root: Path | None = None) -> Config:
-        """Load configuration from environment and .env files."""
+        """Load configuration from environment and .env files.
+
+        Precedence (highest wins):
+          1. Environment variables already set in the process
+          2. Project-root .env file
+          3. Home directory ~/.nala/.env
+          4. Built-in defaults
+        """
         root = project_root or Path.cwd()
 
-        # Load .env files (project root first, then home)
-        project_env = root / ".env"
         home_env = Path.home() / ".nala" / ".env"
+        project_env = root / ".env"
 
+        if home_env.exists():
+            load_dotenv(home_env, override=False)
         if project_env.exists():
-            load_dotenv(project_env)
-        elif home_env.exists():
-            load_dotenv(home_env)
+            load_dotenv(project_env, override=False)
+
+        def _int(key: str, default: int) -> int:
+            raw = os.environ.get(key)
+            if raw is None:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
 
         return cls(
-            llm_provider=os.environ.get("LLM_PROVIDER", "anthropic"),  # type: ignore
+            llm_provider=os.environ.get("LLM_PROVIDER", "anthropic"),  # type: ignore[arg-type]
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
             openai_api_key=os.environ.get("OPENAI_API_KEY"),
             google_api_key=os.environ.get("GOOGLE_API_KEY"),
@@ -101,7 +116,9 @@ class Config(BaseModel):
             neo4j_password=os.environ.get("NEO4J_PASSWORD"),
             neo4j_enabled=os.environ.get("NEO4J_ENABLED", "false").lower() == "true",
             project_root=root,
-            dashboard_port=int(os.environ.get("DASHBOARD_PORT", "3000")),
+            max_context_tokens=_int("MAX_CONTEXT_TOKENS", 100_000),
+            dashboard_port=_int("DASHBOARD_PORT", 3000),
+            dashboard_enabled=os.environ.get("DASHBOARD_ENABLED", "false").lower() == "true",
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────

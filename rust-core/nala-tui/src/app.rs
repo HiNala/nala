@@ -233,7 +233,7 @@ impl App {
                 last_render = Instant::now();
             }
 
-            if self.mode == AppMode::Booting {
+            if self.mode == AppMode::Booting && self.python_bridge.is_some() {
                 self.mode = AppMode::Ready;
             }
 
@@ -329,25 +329,37 @@ impl App {
             Backspace => {
                 self.tab_index = None;
                 if self.cursor_pos > 0 {
-                    let prev = self.cursor_pos - 1;
+                    let prev = self.input[..self.cursor_pos]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
                     self.input.remove(prev);
                     self.cursor_pos = prev;
                 }
             }
             Delete => {
                 self.tab_index = None;
-                if self.cursor_pos < self.input.len() {
+                if self.cursor_pos < self.input.len() && self.input.is_char_boundary(self.cursor_pos) {
                     self.input.remove(self.cursor_pos);
                 }
             }
             Left => {
                 if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
+                    self.cursor_pos = self.input[..self.cursor_pos]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
                 }
             }
             Right => {
                 if self.cursor_pos < self.input.len() {
-                    self.cursor_pos += 1;
+                    self.cursor_pos = self.input[self.cursor_pos..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.cursor_pos + i)
+                        .unwrap_or(self.input.len());
                 }
             }
             Home => self.cursor_pos = 0,
@@ -461,6 +473,7 @@ impl App {
                 symbol_payload,
             } => {
                 self.index_progress = None;
+                crate::ui::file_panel::invalidate_cache();
                 self.stats.total_files = total_files;
                 self.stats.total_functions = symbols;
                 self.status_text = format!(
@@ -558,11 +571,12 @@ impl App {
                 }
             }
             BackgroundEvent::ActionApplied {
-                action_id: _,
+                action_id,
                 success,
                 message,
                 output,
             } => {
+                self.pending_actions.retain(|a| a.action_id != action_id);
                 if success {
                     let mut text = format!("Applied: {}", message);
                     if !output.is_empty() {
@@ -571,7 +585,9 @@ impl App {
                     }
                     self.push_message(Message::system(text));
                 } else {
-                    self.push_message(Message::error(format!("Action failed: {}", message)));
+                    self.push_message(Message::error(format!(
+                        "Action failed: {}. The action has been discarded.", message
+                    )));
                 }
                 self.show_next_pending_action();
             }
@@ -647,6 +663,9 @@ impl App {
                     "Python bridge unavailable: {}. Natural language queries disabled.",
                     e
                 )));
+                if self.mode == AppMode::Booting {
+                    self.mode = AppMode::Ready;
+                }
             }
         }
     }

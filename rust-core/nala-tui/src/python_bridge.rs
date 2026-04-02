@@ -627,6 +627,9 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("[bridge] malformed JSON from Python: {e} — line: {}", &raw[..raw.len().min(200)]);
+            let _ = bg_tx.send(BackgroundEvent::AssistantError(
+                format!("Received malformed response from AI backend: {e}")
+            )).await;
             return;
         }
     };

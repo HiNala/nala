@@ -54,9 +54,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(left_spans)), cols[0]);
 
     let hints = Line::from(vec![
-        Span::styled("? ", Style::default().fg(theme::DARK_GRAY)),
-        Span::styled("for shortcuts", Style::default().fg(theme::DARK_GRAY)),
-        Span::styled("  · ", Style::default().fg(theme::DARK_GRAY)),
+        Span::styled("^B", Style::default().fg(theme::DARK_GRAY)),
+        Span::styled(" files  ", Style::default().fg(theme::DARK_GRAY)),
+        Span::styled("^E", Style::default().fg(theme::DARK_GRAY)),
+        Span::styled(" sessions  ", Style::default().fg(theme::DARK_GRAY)),
         Span::styled("/help", Style::default().fg(theme::CYAN)),
         Span::styled(" ", Style::default()),
     ]);

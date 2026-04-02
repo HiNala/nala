@@ -44,14 +44,14 @@ fn render_header(frame: &mut Frame, action: &PendingAction, area: Rect) {
 }
 
 fn render_preview(frame: &mut Frame, action: &PendingAction, area: Rect) {
-    let mut lines: Vec<Line> = action
-        .preview
-        .lines()
+    let all_lines: Vec<&str> = action.preview.lines().collect();
+    let total = all_lines.len();
+    let mut lines: Vec<Line> = all_lines
+        .iter()
         .take(MAX_PREVIEW_LINES)
-        .map(colorize_diff_line)
+        .map(|l| colorize_diff_line(l))
         .collect();
 
-    let total = action.preview.lines().count();
     if total > MAX_PREVIEW_LINES {
         lines.push(Line::from(Span::styled(
             format!("  ... {} more lines", total - MAX_PREVIEW_LINES),
