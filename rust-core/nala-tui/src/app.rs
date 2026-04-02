@@ -207,8 +207,10 @@ impl App {
 
     pub async fn run(&mut self) -> Result<()> {
         let mut terminal = ratatui::init();
+        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
         self.start_python_bridge().await;
         let result = self.event_loop(&mut terminal).await;
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
         ratatui::restore();
         result
     }
@@ -267,8 +269,24 @@ impl App {
         match event {
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {}
-            Event::Mouse(_) => {}
+            Event::Mouse(mouse) => self.handle_mouse(mouse),
             _ => {}
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseEventKind, MouseButton};
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+            // Clicking in the left 30 columns opens the file panel if closed
+            if mouse.column < 5 && !self.panels.file_panel_open {
+                self.panels.file_panel_open = true;
+            }
+        }
+        if let MouseEventKind::ScrollUp = mouse.kind {
+            // Future: scroll message log up
+        }
+        if let MouseEventKind::ScrollDown = mouse.kind {
+            // Future: scroll message log down
         }
     }
 
@@ -287,6 +305,20 @@ impl App {
                 }
                 Char('e') => {
                     self.panels.session_panel_open = !self.panels.session_panel_open;
+                    return;
+                }
+                Left => {
+                    self.cursor_pos = word_boundary_left(&self.input, self.cursor_pos);
+                    return;
+                }
+                Right => {
+                    self.cursor_pos = word_boundary_right(&self.input, self.cursor_pos);
+                    return;
+                }
+                Char('w') => {
+                    let left = word_boundary_left(&self.input, self.cursor_pos);
+                    self.input.drain(left..self.cursor_pos);
+                    self.cursor_pos = left;
                     return;
                 }
                 _ => {}
@@ -606,4 +638,37 @@ impl App {
             }
         }
     }
+}
+
+// ── Word boundary helpers for Ctrl+Left/Right ──────────────────────────────
+
+fn word_boundary_left(text: &str, pos: usize) -> usize {
+    if pos == 0 {
+        return 0;
+    }
+    let bytes = text.as_bytes();
+    let mut i = pos - 1;
+    while i > 0 && bytes[i].is_ascii_whitespace() {
+        i -= 1;
+    }
+    while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    i
+}
+
+fn word_boundary_right(text: &str, pos: usize) -> usize {
+    let len = text.len();
+    if pos >= len {
+        return len;
+    }
+    let bytes = text.as_bytes();
+    let mut i = pos;
+    while i < len && !bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    while i < len && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    i
 }

@@ -6,6 +6,17 @@ Nala combines the speed of NeoVim, the intelligence of Cursor, the code-review d
 
 **Status:** Active development. See [docs/missions/](docs/missions/) for the full build plan.
 
+### Terminal UI Highlights
+
+- Custom dark theme with semantic color palette (blue-violet accent family)
+- Top bar with project name, git branch, LSP status, and mode badge
+- Message area with role badges (YOU/AI/SYS/ERR), separators, and scrollbar
+- File tree panel with language-colored icons and scanner-aligned skip rules
+- Visual progress gauge during indexing
+- Ctrl+Left/Right word jump, Ctrl+W delete-word, mouse click support
+- Live LSP diagnostics (error/warning counts in status bar and top bar)
+- Diff confirmation view with color-coded add/remove/context lines
+
 ---
 
 ## Quick Start
@@ -90,8 +101,13 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 |-----|--------|
 | `Ctrl+B` | Toggle file tree panel |
 | `Ctrl+E` | Toggle session panel |
+| `Ctrl+←` / `Ctrl+→` | Jump word left/right |
+| `Ctrl+W` | Delete word backward |
 | `↑` / `↓` | Navigate command history |
+| `Home` / `End` | Jump to start/end of input |
+| `Esc` | Clear current input |
 | `Ctrl+C` / `Ctrl+Q` | Quit |
+| Mouse click | Open file panel, interact with UI |
 
 ---
 

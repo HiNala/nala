@@ -1,15 +1,12 @@
 //! Diff/preview renderer for Confirming mode.
 //!
-//! Renders a unified diff (or action preview) with:
-//! - Red lines for removals  (`-` prefix)
-//! - Green lines for additions (`+` prefix)
-//! - Gray lines for context / metadata (`@` / `---` / `+++`)
-//! - White lines for everything else
+//! Renders a unified diff (or action preview) with color-coded lines.
 
 use crate::app::{App, PendingAction};
+use crate::ui::theme;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
@@ -17,23 +14,18 @@ use ratatui::{
 
 const MAX_PREVIEW_LINES: usize = 30;
 
-/// Render the Confirming-mode overlay.
-///
-/// Shows the current pending action's diff/preview and the confirmation
-/// key-binding bar at the bottom.
 pub fn render_confirm(frame: &mut Frame, app: &App, area: Rect) {
     let action = match app.pending_actions.first() {
         Some(a) => a,
         None => return,
     };
 
-    // Split area: header | diff | key-hint
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header
-            Constraint::Fill(1),   // diff preview
-            Constraint::Length(1), // key hint
+            Constraint::Length(3),
+            Constraint::Fill(1),
+            Constraint::Length(1),
         ])
         .split(area);
 
@@ -50,17 +42,18 @@ fn render_header(frame: &mut Frame, action: &PendingAction, area: Rect) {
     );
     let block = Block::default()
         .title(title)
+        .title_style(Style::default().fg(theme::ACCENT_WARM).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .style(Style::default().bg(Color::Rgb(10, 10, 18)));
+        .border_style(Style::default().fg(theme::WARNING))
+        .style(theme::base_style());
     frame.render_widget(block, area);
 }
 
 fn render_preview(frame: &mut Frame, action: &PendingAction, area: Rect) {
     let block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .style(Style::default().bg(Color::Rgb(10, 10, 18)));
+        .border_style(Style::default().fg(theme::BORDER_NORMAL))
+        .style(theme::base_style());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -69,7 +62,7 @@ fn render_preview(frame: &mut Frame, action: &PendingAction, area: Rect) {
         .preview
         .lines()
         .take(MAX_PREVIEW_LINES)
-        .map(|l| colorize_diff_line(l))
+        .map(colorize_diff_line)
         .collect();
 
     let total = action.preview.lines().count();
@@ -77,7 +70,7 @@ fn render_preview(frame: &mut Frame, action: &PendingAction, area: Rect) {
     if total > MAX_PREVIEW_LINES {
         all_lines.push(Line::from(Span::styled(
             format!("  ... {} more lines", total - MAX_PREVIEW_LINES),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::FG_DIM),
         )));
     }
 
@@ -89,13 +82,22 @@ fn render_preview(frame: &mut Frame, action: &PendingAction, area: Rect) {
 
 fn render_hint(frame: &mut Frame, app: &App, area: Rect) {
     let remaining = app.pending_actions.len();
-    let hint = format!(
-        " [y] Apply  [n] Skip  [a] Apply all  [q] Skip all    ({} action{} pending)",
-        remaining,
-        if remaining == 1 { "" } else { "s" },
-    );
+    let hint = Line::from(vec![
+        Span::styled(" [y]", Style::default().fg(theme::ACCENT_GREEN).add_modifier(Modifier::BOLD)),
+        Span::styled(" Apply  ", Style::default().fg(theme::FG_SECONDARY)),
+        Span::styled("[n]", Style::default().fg(theme::ACCENT_ROSE).add_modifier(Modifier::BOLD)),
+        Span::styled(" Skip  ", Style::default().fg(theme::FG_SECONDARY)),
+        Span::styled("[a]", Style::default().fg(theme::ACCENT_PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled(" Apply all  ", Style::default().fg(theme::FG_SECONDARY)),
+        Span::styled("[q]", Style::default().fg(theme::FG_DIM).add_modifier(Modifier::BOLD)),
+        Span::styled(" Skip all  ", Style::default().fg(theme::FG_SECONDARY)),
+        Span::styled(
+            format!("  ({} pending)", remaining),
+            Style::default().fg(theme::FG_MUTED),
+        ),
+    ]);
     frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(Color::Yellow).bg(Color::Rgb(20, 15, 0))),
+        Paragraph::new(hint).style(Style::default().bg(theme::BG_ELEVATED)),
         area,
     );
 }
@@ -103,27 +105,27 @@ fn render_hint(frame: &mut Frame, app: &App, area: Rect) {
 fn colorize_diff_line(line: &str) -> Line<'static> {
     let line = line.to_owned();
     if line.starts_with('+') && !line.starts_with("+++") {
-        Line::from(Span::styled(
-            line,
-            Style::default().fg(Color::Green),
-        ))
+        Line::from(Span::styled(line, Style::default().fg(theme::DIFF_ADD)))
     } else if line.starts_with('-') && !line.starts_with("---") {
-        Line::from(Span::styled(
-            line,
-            Style::default().fg(Color::Red),
-        ))
+        Line::from(Span::styled(line, Style::default().fg(theme::DIFF_REMOVE)))
     } else if line.starts_with("@@") || line.starts_with("---") || line.starts_with("+++") {
         Line::from(Span::styled(
             line,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::FG_MUTED)
+                .add_modifier(Modifier::BOLD),
         ))
     } else if line.starts_with('$') {
-        // Shell command preview
         Line::from(Span::styled(
             line,
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
         ))
     } else {
-        Line::from(Span::styled(line, Style::default().fg(Color::White)))
+        Line::from(Span::styled(
+            line,
+            Style::default().fg(theme::DIFF_CONTEXT),
+        ))
     }
 }

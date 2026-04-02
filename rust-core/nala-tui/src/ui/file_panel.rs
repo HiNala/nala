@@ -1,35 +1,68 @@
 //! File tree panel (left side, Ctrl+B to toggle).
 //!
-//! Shows a shallow recursive project tree for fast large-repo orientation.
+//! Shows a shallow recursive project tree with language-colored icons
+//! and directory skip rules aligned with the scanner.
 
 use crate::app::App;
+use crate::ui::theme;
 use ratatui::{
-    style::{Color, Modifier, Style},
+    layout::Rect,
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem},
-    Frame, layout::Rect,
+    widgets::{Block, Borders, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    Frame,
 };
 use std::path::{Path, PathBuf};
 
+const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".nala",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".pytest_cache",
+];
+
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
-        .title(Span::styled(" Files ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(
+            " Files ",
+            theme::bold_accent(),
+        ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(40, 40, 80)))
-        .style(Style::default().bg(Color::Rgb(10, 10, 18)));
+        .border_style(Style::default().fg(theme::BORDER_NORMAL))
+        .style(theme::base_style());
 
     let items = build_tree_items(&app.project_root);
+    let total = items.len();
     let list = List::new(items).block(block);
     frame.render_widget(list, area);
+
+    if total > area.height.saturating_sub(2) as usize {
+        let mut scrollbar_state = ScrollbarState::new(total);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_style(Style::default().fg(theme::FG_DIM))
+                .track_style(Style::default().fg(theme::BORDER_DIM)),
+            area,
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn build_tree_items(root: &Path) -> Vec<ListItem<'static>> {
     let mut items = Vec::new();
-    walk_tree(root, root, 0, 3, &mut items, 220);
+    walk_tree(root, root, 0, 3, &mut items, 300);
     if items.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
-            " [empty]",
-            Style::default().fg(Color::DarkGray),
+            " (empty project)",
+            Style::default().fg(theme::FG_DIM),
         ))));
     }
     items
@@ -54,7 +87,13 @@ fn walk_tree(
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            !name.starts_with('.') || name == ".github"
+            if SKIP_DIRS.contains(&name) {
+                return false;
+            }
+            if name.starts_with('.') && name != ".github" {
+                return false;
+            }
+            true
         })
         .collect();
     paths.sort_by(|a, b| {
@@ -63,52 +102,58 @@ fn walk_tree(
         b_dir.cmp(&a_dir).then(a.cmp(b))
     });
 
+    let indent = "  ".repeat(depth);
+    let connector = if depth == 0 { "" } else { "├ " };
+
     for path in paths {
         if items.len() >= max_items {
             return;
         }
-        let rel = path
-            .strip_prefix(root)
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_else(|_| path.display().to_string());
-        let indent = "  ".repeat(depth);
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+
         if path.is_dir() {
-            items.push(ListItem::new(Line::from(Span::styled(
-                format!(" {}[D] {}", indent, rel),
-                Style::default().fg(Color::Yellow),
-            ))));
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {}{}", indent, connector),
+                    Style::default().fg(theme::FG_DIM),
+                ),
+                Span::styled(
+                    format!("{}/", name),
+                    Style::default()
+                        .fg(theme::ACCENT_WARM)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])));
             walk_tree(root, &path, depth + 1, max_depth, items, max_items);
         } else {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            items.push(ListItem::new(Line::from(Span::styled(
-                format!(" {}{} {}", indent, file_icon(ext), rel),
-                Style::default().fg(file_color(ext)),
-            ))));
+            let icon = file_icon(ext);
+            let color = theme::lang_color(ext);
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {}{}", indent, connector),
+                    Style::default().fg(theme::FG_DIM),
+                ),
+                Span::styled(format!("{} ", icon), Style::default().fg(color)),
+                Span::styled(name, Style::default().fg(theme::FG_SECONDARY)),
+            ])));
         }
     }
 }
 
 fn file_icon(ext: &str) -> &'static str {
     match ext {
-        "rs" => "[R]",
-        "py" => "[P]",
-        "js" | "ts" | "jsx" | "tsx" => "[J]",
-        "go" => "[G]",
-        "md" => "[M]",
-        "toml" | "yaml" | "yml" => "[C]",
-        "json" => "[{]",
-        _ => "[F]",
-    }
-}
-
-fn file_color(ext: &str) -> Color {
-    match ext {
-        "rs" => Color::Rgb(250, 160, 90),
-        "py" => Color::Rgb(70, 170, 230),
-        "js" | "jsx" => Color::Rgb(240, 220, 80),
-        "ts" | "tsx" => Color::Rgb(50, 140, 220),
-        "go" => Color::Rgb(0, 200, 210),
-        "md" => Color::Rgb(160, 160, 200),
-        _ => Color::White,
+        "rs" => "●",
+        "py" => "◆",
+        "js" | "jsx" => "▲",
+        "ts" | "tsx" => "▲",
+        "go" => "◇",
+        "md" => "▪",
+        "toml" | "yaml" | "yml" | "json" => "◈",
+        _ => "○",
     }
 }

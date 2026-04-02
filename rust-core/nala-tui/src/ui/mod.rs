@@ -10,3 +10,4 @@ pub mod layout;
 pub mod session_panel;
 pub mod splash;
 pub mod status_bar;
+pub mod theme;
