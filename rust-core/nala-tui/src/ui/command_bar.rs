@@ -1,10 +1,10 @@
 //! Command input bar.
 //!
 //! The primary interaction point. Sits at the bottom of the screen above the
-//! status bar. Renders a prompt prefix, the current input text, and a styled
-//! cursor. Slash commands are highlighted differently from free-text queries.
+//! status bar. Renders a prompt prefix, the current input text, a styled
+//! cursor, and ghost-text tab-completion hints for slash commands.
 
-use crate::app::App;
+use crate::app::{self, App};
 use crate::ui::theme;
 use ratatui::{
     layout::Rect,
@@ -50,16 +50,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         let (cursor_char, rest) = if after_cursor.is_empty() {
             (" ", "")
         } else {
-            let mut chars = after_cursor.char_indices();
-            let ch = match chars.next() {
-                Some((_, c)) => c,
+            let ch = match after_cursor.chars().next() {
+                Some(c) => c,
                 None => return,
             };
             let end = ch.len_utf8();
             (&after_cursor[..end], &after_cursor[end..])
         };
 
-        Line::from(vec![
+        let mut spans = vec![
             prompt,
             Span::styled(before_cursor, input_style),
             Span::styled(
@@ -70,12 +69,33 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(rest, input_style),
-        ])
+        ];
+
+        if let Some(hint) = app::tab_hint(&app.input) {
+            let ghost = &hint[app.input.len()..];
+            spans.push(Span::styled(
+                ghost,
+                Style::default().fg(theme::FG_DIM),
+            ));
+            spans.push(Span::styled(
+                "  TAB",
+                Style::default()
+                    .fg(theme::BG_OVERLAY)
+                    .add_modifier(Modifier::ITALIC),
+            ));
+        }
+
+        Line::from(spans)
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_NORMAL))
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(if app.input.is_empty() {
+            theme::BORDER_NORMAL
+        } else {
+            theme::BORDER_FOCUSED
+        }))
         .style(Style::default().bg(theme::BG_BASE));
 
     frame.render_widget(Paragraph::new(content).block(block), area);

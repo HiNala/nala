@@ -205,6 +205,11 @@ fn render_main_content(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    if app.messages.is_empty() && app.streaming_response.is_none() {
+        render_empty_state(frame, inner);
+        return;
+    }
+
     let mut lines: Vec<Line> = Vec::new();
 
     for msg in &app.messages {
@@ -235,10 +240,7 @@ fn render_main_content(frame: &mut Frame, app: &App, area: Rect) {
             if i == 0 {
                 lines.push(Line::from(vec![
                     Span::styled(badge, badge_style),
-                    Span::styled(
-                        format!(" {}", text_line),
-                        text_style,
-                    ),
+                    Span::styled(format!(" {}", text_line), text_style),
                 ]));
             } else {
                 lines.push(Line::from(Span::styled(
@@ -247,14 +249,12 @@ fn render_main_content(frame: &mut Frame, app: &App, area: Rect) {
                 )));
             }
         }
-        // Thin visual separator between messages
         lines.push(Line::from(Span::styled(
             "─".repeat(inner.width.saturating_sub(2) as usize),
             Style::default().fg(theme::BORDER_DIM),
         )));
     }
 
-    // Streaming response
     if let Some(ref streaming) = app.streaming_response {
         lines.push(Line::from(vec![
             Span::styled(
@@ -277,11 +277,12 @@ fn render_main_content(frame: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    // Scroll to bottom
     let total_lines = lines.len();
     let visible_height = inner.height as usize;
-    let start = total_lines.saturating_sub(visible_height);
-    let visible: Vec<Line> = lines.into_iter().skip(start).collect();
+    let max_offset = total_lines.saturating_sub(visible_height);
+    let offset = app.scroll_offset.min(max_offset);
+    let start = max_offset.saturating_sub(offset);
+    let visible: Vec<Line> = lines.into_iter().skip(start).take(visible_height).collect();
 
     frame.render_widget(
         Paragraph::new(visible)
@@ -290,10 +291,8 @@ fn render_main_content(frame: &mut Frame, app: &App, area: Rect) {
         inner,
     );
 
-    // Scrollbar on the right edge
     if total_lines > visible_height {
-        let mut scrollbar_state =
-            ScrollbarState::new(total_lines).position(start);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(start);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_style(Style::default().fg(theme::FG_DIM))
@@ -302,4 +301,35 @@ fn render_main_content(frame: &mut Frame, app: &App, area: Rect) {
             &mut scrollbar_state,
         );
     }
+
+    if offset > 0 {
+        let badge = Line::from(Span::styled(
+            format!(" ↑ {} more lines ", offset),
+            Style::default()
+                .fg(theme::BG_DEEP)
+                .bg(theme::ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ));
+        let badge_area = Rect {
+            x: inner.x + inner.width.saturating_sub(22),
+            y: inner.y,
+            width: 20.min(inner.width),
+            height: 1,
+        };
+        frame.render_widget(Paragraph::new(badge), badge_area);
+    }
+}
+
+fn render_empty_state(frame: &mut Frame, area: Rect) {
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  No messages yet.",
+            Style::default().fg(theme::FG_DIM),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).style(theme::base_style()),
+        area,
+    );
 }

@@ -9,7 +9,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Block, BorderType, Borders, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
 use std::path::{Path, PathBuf};
@@ -30,12 +30,16 @@ const SKIP_DIRS: &[&str] = &[
 ];
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    let file_count = count_visible_files(&app.project_root);
+    let title = if file_count > 0 {
+        format!(" Files ({}) ", file_count)
+    } else {
+        " Files ".to_string()
+    };
     let block = Block::default()
-        .title(Span::styled(
-            " Files ",
-            theme::bold_accent(),
-        ))
+        .title(Span::styled(title, theme::bold_accent()))
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme::BORDER_NORMAL))
         .style(theme::base_style());
 
@@ -155,5 +159,33 @@ fn file_icon(ext: &str) -> &'static str {
         "md" => "▪",
         "toml" | "yaml" | "yml" | "json" => "◈",
         _ => "○",
+    }
+}
+
+fn count_visible_files(root: &Path) -> usize {
+    let mut count = 0;
+    count_files_recursive(root, 0, 3, &mut count);
+    count
+}
+
+fn count_files_recursive(current: &Path, depth: usize, max_depth: usize, count: &mut usize) {
+    if depth > max_depth {
+        return;
+    }
+    let entries = match std::fs::read_dir(current) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if SKIP_DIRS.contains(&name) || (name.starts_with('.') && name != ".github") {
+            continue;
+        }
+        if path.is_dir() {
+            count_files_recursive(&path, depth + 1, max_depth, count);
+        } else {
+            *count += 1;
+        }
     }
 }

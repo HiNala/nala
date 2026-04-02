@@ -152,6 +152,8 @@ pub struct App {
     pub analysis_scope: Option<String>,
     pub lsp_initialized: bool,
     pub diagnostics_store: DiagnosticsStore,
+    pub scroll_offset: usize,
+    pub tab_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -178,7 +180,13 @@ impl App {
             history: Vec::new(),
             history_idx: None,
             messages: vec![Message::system(
-                "Welcome to HiNala. Type a question or /help for commands.",
+                "Welcome to HiNala — terminal-first AI coding environment.\n\
+                 Quick start:\n\
+                 \x20 • Type a question to ask the AI\n\
+                 \x20 • /analyze  — run code analysis\n\
+                 \x20 • /act      — ask AI to edit code\n\
+                 \x20 • /help     — see all commands\n\
+                 \x20 • Ctrl+B    — toggle file tree",
             )],
             status_text: "Initializing...".to_string(),
             index_progress: None,
@@ -195,6 +203,8 @@ impl App {
             analysis_scope: None,
             lsp_initialized: false,
             diagnostics_store: DiagnosticsStore::new(),
+            scroll_offset: 0,
+            tab_index: None,
         })
     }
 
@@ -204,6 +214,7 @@ impl App {
             let drain = self.messages.len() - MAX_MESSAGES;
             self.messages.drain(0..drain);
         }
+        self.scroll_offset = 0;
     }
 
     // ── Main loop ──────────────────────────────────────────────────────────
@@ -280,16 +291,15 @@ impl App {
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseEventKind, MouseButton};
         if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-            // Clicking in the left 30 columns opens the file panel if closed
             if mouse.column < 5 && !self.panels.file_panel_open {
                 self.panels.file_panel_open = true;
             }
         }
         if let MouseEventKind::ScrollUp = mouse.kind {
-            // Future: scroll message log up
+            self.scroll_offset = self.scroll_offset.saturating_add(3);
         }
         if let MouseEventKind::ScrollDown = mouse.kind {
-            // Future: scroll message log down
+            self.scroll_offset = self.scroll_offset.saturating_sub(3);
         }
     }
 
@@ -339,12 +349,15 @@ impl App {
 
         match key.code {
             Enter => self.submit_input(),
+            Tab => self.cycle_tab_completion(),
             Char(c) => {
                 self.history_idx = None;
+                self.tab_index = None;
                 self.input.insert(self.cursor_pos, c);
                 self.cursor_pos += c.len_utf8();
             }
             Backspace => {
+                self.tab_index = None;
                 if self.cursor_pos > 0 {
                     let prev = self.cursor_pos - 1;
                     self.input.remove(prev);
@@ -352,6 +365,7 @@ impl App {
                 }
             }
             Delete => {
+                self.tab_index = None;
                 if self.cursor_pos < self.input.len() {
                     self.input.remove(self.cursor_pos);
                 }
@@ -368,12 +382,15 @@ impl App {
             }
             Home => self.cursor_pos = 0,
             End => self.cursor_pos = self.input.len(),
+            PageUp => self.scroll_offset = self.scroll_offset.saturating_add(10),
+            PageDown => self.scroll_offset = self.scroll_offset.saturating_sub(10),
             Up => self.history_up(),
             Down => self.history_down(),
             Esc => {
                 self.input.clear();
                 self.cursor_pos = 0;
                 self.history_idx = None;
+                self.tab_index = None;
             }
             _ => {}
         }
@@ -649,6 +666,52 @@ impl App {
             }
         }
     }
+}
+
+// ── Slash-command names for tab completion ──────────────────────────────────
+
+pub const SLASH_COMMANDS: &[&str] = &[
+    "/help", "/scan", "/index", "/analyze", "/scope", "/lsp status",
+    "/def", "/refs", "/hover", "/diag", "/doctor", "/act",
+    "/session", "/session new", "/session load", "/session summary",
+    "/generate", "/context", "/compact", "/graph",
+    "/team", "/team status", "/team cancel",
+    "/handoff", "/handoff save", "/handoff history",
+    "/clear", "/quit",
+];
+
+impl App {
+    fn cycle_tab_completion(&mut self) {
+        if !self.input.starts_with('/') {
+            return;
+        }
+        let prefix = self.input.clone();
+        let matches: Vec<&&str> = SLASH_COMMANDS
+            .iter()
+            .filter(|cmd| cmd.starts_with(&prefix) && **cmd != prefix.as_str())
+            .collect();
+        if matches.is_empty() {
+            return;
+        }
+        let idx = match self.tab_index {
+            Some(i) => (i + 1) % matches.len(),
+            None => 0,
+        };
+        self.tab_index = Some(idx);
+        self.input = matches[idx].to_string();
+        self.cursor_pos = self.input.len();
+    }
+}
+
+/// Return the first matching command for the current input prefix (for ghost hint).
+pub fn tab_hint(input: &str) -> Option<&'static str> {
+    if !input.starts_with('/') || input.len() < 2 {
+        return None;
+    }
+    SLASH_COMMANDS
+        .iter()
+        .find(|cmd| cmd.starts_with(input) && **cmd != input)
+        .copied()
 }
 
 // ── Word boundary helpers for Ctrl+Left/Right ──────────────────────────────

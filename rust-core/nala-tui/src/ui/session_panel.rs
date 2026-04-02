@@ -8,18 +8,23 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem},
+    widgets::{Block, BorderType, Borders, List, ListItem},
     Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    let sessions = load_sessions(&app.project_root);
+    let title = if sessions.is_empty() {
+        " Sessions ".to_string()
+    } else {
+        format!(" Sessions ({}) ", sessions.len())
+    };
     let block = Block::default()
-        .title(Span::styled(" Sessions ", theme::bold_accent()))
+        .title(Span::styled(title, theme::bold_accent()))
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme::BORDER_NORMAL))
         .style(theme::base_style());
-
-    let sessions = load_sessions(&app.project_root);
     let items: Vec<ListItem> = if sessions.is_empty() {
         vec![
             ListItem::new(Line::from(Span::styled(

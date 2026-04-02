@@ -13,10 +13,11 @@ use ratatui::{
     Frame,
 };
 
-const LOGO: &str = r"
-  ╦ ╦ ╦ ╔╗╔ ╔═╗ ╦   ╔═╗
-  ╠═╣ ║ ║║║ ╠═╣ ║   ╠═╣
-  ╩ ╩ ╩ ╝╚╝ ╩ ╩ ╩═╝ ╩ ╩";
+const LOGO: &[&str] = &[
+    "  ╦ ╦ ╦ ╔╗╔ ╔═╗ ╦   ╔═╗",
+    "  ╠═╣ ║ ║║║ ╠═╣ ║   ╠═╣",
+    "  ╩ ╩ ╩ ╝╚╝ ╩ ╩ ╩═╝ ╩ ╩",
+];
 
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -30,29 +31,45 @@ pub fn render(frame: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(2),
             Constraint::Length(3),
             Constraint::Fill(1),
         ])
         .split(area);
 
-    // Logo — gradient-style accent
+    let elapsed_ms = app.splash_start.elapsed().as_millis() as f64;
+    let fade_factor = (elapsed_ms / 500.0).min(1.0);
+
     let logo_lines: Vec<Line> = LOGO
-        .lines()
+        .iter()
         .enumerate()
         .map(|(i, l)| {
-            let color = match i {
-                0 | 1 => theme::ACCENT_PRIMARY,
-                2 => theme::ACCENT_SECONDARY,
-                _ => theme::FG_MUTED,
+            let base_color = match i {
+                0 => theme::ACCENT_PRIMARY,
+                1 => theme::ACCENT_SECONDARY,
+                _ => theme::ACCENT_WARM,
+            };
+            let r = match base_color {
+                ratatui::style::Color::Rgb(r, _, _) => (r as f64 * fade_factor) as u8,
+                _ => 100,
+            };
+            let g = match base_color {
+                ratatui::style::Color::Rgb(_, g, _) => (g as f64 * fade_factor) as u8,
+                _ => 100,
+            };
+            let b = match base_color {
+                ratatui::style::Color::Rgb(_, _, b) => (b as f64 * fade_factor) as u8,
+                _ => 100,
             };
             Line::from(Span::styled(
-                l,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
+                *l,
+                Style::default()
+                    .fg(ratatui::style::Color::Rgb(r, g, b))
+                    .add_modifier(Modifier::BOLD),
             ))
         })
         .collect();
@@ -61,7 +78,6 @@ pub fn render(frame: &mut Frame, app: &App) {
         vertical[1],
     );
 
-    // Tagline
     frame.render_widget(
         Paragraph::new(Span::styled(
             "terminal-first AI coding environment",
@@ -71,7 +87,6 @@ pub fn render(frame: &mut Frame, app: &App) {
         vertical[3],
     );
 
-    // Version
     frame.render_widget(
         Paragraph::new(Span::styled(
             format!("v{}", env!("CARGO_PKG_VERSION")),
@@ -81,13 +96,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         vertical[4],
     );
 
-    // Progress gauge
     let progress = app.index_progress.unwrap_or(0.0);
-    let elapsed_ms = app.splash_start.elapsed().as_millis();
-    let dots = ".".repeat(((elapsed_ms / 400) % 4) as usize);
+    let dots = ".".repeat(((elapsed_ms as u128 / 400) % 4) as usize);
     let label = format!("initializing{}", dots);
 
-    let gauge_area = centered_rect(40, vertical[6]);
+    let gauge_area = centered_rect(36, vertical[6]);
     frame.render_widget(
         Gauge::default()
             .block(Block::default())
