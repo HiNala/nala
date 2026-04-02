@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 class OllamaProvider(BaseLLMProvider):
     """Provider for local models served by Ollama."""
 
-    def __init__(self, config: Config) -> None:
-        super().__init__(config)
+    def __init__(self, config: Config, model_override: str | None = None) -> None:
+        super().__init__(config, model_override=model_override)
         self.base_url = config.ollama_base_url.rstrip("/")
 
     async def chat(

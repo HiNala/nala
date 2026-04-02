@@ -73,6 +73,37 @@ impl App {
                     ));
                 }
             }
+            "/models" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                match args {
+                    "refresh" => {
+                        self.push_message(Message::system("Refreshing model registry..."));
+                        let Some(bridge) = self.python_bridge.clone() else {
+                            self.push_message(Message::system("AI bridge not ready."));
+                            return;
+                        };
+                        let tx = self.bg_tx.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = bridge.models_refresh().await {
+                                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                            }
+                        });
+                    }
+                    _ => {
+                        self.push_message(Message::system("Loading model registry..."));
+                        let Some(bridge) = self.python_bridge.clone() else {
+                            self.push_message(Message::system("AI bridge not ready."));
+                            return;
+                        };
+                        let tx = self.bg_tx.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = bridge.models_list().await {
+                                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                            }
+                        });
+                    }
+                }
+            }
             "/scope" => {
                 let args = parts.get(1).copied().unwrap_or("").trim().to_string();
                 self.set_analysis_scope(args);
@@ -205,7 +236,9 @@ impl App {
             "  /context               — context window usage\n",
             "  /compact               — free tokens by compacting\n\n",
             "### Settings\n",
-            "  /model                 — show or switch LLM provider/model\n",
+            "  /model                 — show current LLM provider/model\n",
+            "  /models                — show all available models + routing\n",
+            "  /models refresh        — re-probe provider API keys\n",
             "  /doctor                — environment diagnostics\n\n",
             "### General\n",
             "  /scan / /index         — rescan or reindex project files\n",

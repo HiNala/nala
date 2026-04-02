@@ -22,15 +22,24 @@ _CODE_CPT   = 3.5
 
 # Default model context windows (tokens).
 MODEL_LIMITS: dict[str, int] = {
-    "claude-opus-4-6":        200_000,
-    "claude-sonnet-4-6":      200_000,
-    "claude-haiku-4-5":       200_000,
-    "gpt-4o":                 128_000,
-    "gpt-4o-mini":            128_000,
-    "gemini-1.5-pro":       1_000_000,
-    "gemini-1.5-flash":     1_000_000,
-    "llama3":                   8_000,  # Ollama default
-    "default":              200_000,
+    # Anthropic
+    "claude-opus-4-6":          200_000,
+    "claude-sonnet-4-6":        200_000,
+    "claude-haiku-4-5":         200_000,
+    # OpenAI
+    "gpt-4o":                   128_000,
+    "gpt-4o-mini":              128_000,
+    "o3-mini":                  200_000,
+    # Google Gemini
+    "gemini-2.5-pro-preview-05-06": 1_000_000,
+    "gemini-2.0-flash":       1_000_000,
+    "gemini-2.0-flash-lite":  1_000_000,
+    # Ollama
+    "codellama:13b":             16_000,
+    "llama3:8b":                  8_000,
+    "deepseek-coder-v2:16b":    32_000,
+    # Fallback
+    "default":                  200_000,
 }
 
 # Reserve 10% of the window for the model's own reasoning.

@@ -148,6 +148,9 @@ pub enum BridgeRequest {
     AgentCheckpoints,
     AgentRestore { index: u32 },
     AgentNextSteps,
+    // ── Models registry (P7-01) ─────────────────────────────────────
+    ModelsList,
+    ModelsRefresh,
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -549,6 +552,16 @@ impl PythonBridge {
 
     pub async fn agent_next_steps(&self) -> Result<()> {
         self.request_tx.send(BridgeRequest::AgentNextSteps).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn models_list(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::ModelsList).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn models_refresh(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::ModelsRefresh).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -973,6 +986,14 @@ async fn bridge_task(
                             BridgeRequest::AgentNextSteps => json!({
                                 "id": id,
                                 "type": "agent_next_steps",
+                            }),
+                            BridgeRequest::ModelsList => json!({
+                                "id": id,
+                                "type": "models_list",
+                            }),
+                            BridgeRequest::ModelsRefresh => json!({
+                                "id": id,
+                                "type": "models_refresh",
                             }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {

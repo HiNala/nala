@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 class AnthropicProvider(BaseLLMProvider):
     """Provider for Anthropic's Claude models."""
 
-    def __init__(self, config: Config) -> None:
-        super().__init__(config)
+    def __init__(self, config: Config, model_override: str | None = None) -> None:
+        super().__init__(config, model_override=model_override)
         try:
             import anthropic
             self._client = anthropic.AsyncAnthropic(

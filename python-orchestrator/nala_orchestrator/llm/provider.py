@@ -1,12 +1,13 @@
 """
 Base LLM provider interface and factory.
 
-All providers implement BaseLLMProvider. The factory function `create_provider`
-returns the correct provider based on the Config's llm_provider setting.
+All providers implement BaseLLMProvider. The factory functions create providers:
+  - `create_provider(config)` — uses the primary configured provider
+  - `create_provider_for(provider, model, config)` — targets a specific provider/model
 
 Adding a new provider:
   1. Create a new file (e.g. my_provider.py) with a class that extends BaseLLMProvider
-  2. Add it to the `create_provider` factory match statement
+  2. Add it to the `_make_provider` factory match statement
   3. Add the API key field to Config
 """
 
@@ -49,12 +50,15 @@ class LLMResponse:
 class BaseLLMProvider(ABC):
     """Abstract base for all LLM providers."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, model_override: str | None = None) -> None:
         self.config = config
+        self._model_override = model_override
 
     @property
     def model(self) -> str:
         """The model identifier for this provider."""
+        if self._model_override:
+            return self._model_override
         return self.config.active_model()
 
     @abstractmethod
@@ -85,23 +89,45 @@ class BaseLLMProvider(ABC):
 # ── Factory ────────────────────────────────────────────────────────────────
 
 
-def create_provider(config: Config) -> BaseLLMProvider:
-    """Instantiate the correct provider based on config.llm_provider."""
-    match config.llm_provider:
+def _make_provider(
+    provider_name: str,
+    config: Config,
+    model_override: str | None = None,
+) -> BaseLLMProvider:
+    """Internal factory — creates a provider instance by name."""
+    match provider_name:
         case "anthropic":
             from .anthropic_provider import AnthropicProvider
-            return AnthropicProvider(config)
+            return AnthropicProvider(config, model_override=model_override)
         case "openai":
             from .openai_provider import OpenAIProvider
-            return OpenAIProvider(config)
+            return OpenAIProvider(config, model_override=model_override)
         case "google":
             from .google_provider import GoogleProvider
-            return GoogleProvider(config)
+            return GoogleProvider(config, model_override=model_override)
         case "ollama":
             from .ollama_provider import OllamaProvider
-            return OllamaProvider(config)
+            return OllamaProvider(config, model_override=model_override)
         case _:
             raise ValueError(
-                f"Unknown LLM provider: '{config.llm_provider}'. "
+                f"Unknown LLM provider: '{provider_name}'. "
                 "Valid options: anthropic, openai, google, ollama"
             )
+
+
+def create_provider(config: Config) -> BaseLLMProvider:
+    """Instantiate the correct provider based on config.llm_provider."""
+    return _make_provider(config.llm_provider, config)
+
+
+def create_provider_for(
+    provider_name: str,
+    model_id: str,
+    config: Config,
+) -> BaseLLMProvider:
+    """Create a provider targeting a specific provider and model.
+
+    Used by the model router to send different tasks to different models.
+    The provider still reads API keys from config, but the model is overridden.
+    """
+    return _make_provider(provider_name, config, model_override=model_id)

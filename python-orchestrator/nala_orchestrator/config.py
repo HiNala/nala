@@ -52,6 +52,10 @@ class Config(BaseModel):
     neo4j_password: str | None = Field(default=None)
     neo4j_enabled: bool = Field(default=False)
 
+    # ── Multi-model routing overrides ──────────────────────────────────
+    # Format: ROUTE_<TASK>=<provider>:<model>  e.g. ROUTE_PLAN=anthropic:claude-opus-4-6
+    model_overrides: dict[str, tuple[str, str]] = Field(default_factory=dict)
+
     # ── Project settings ──────────────────────────────────────────────────
 
     project_root: Path = Field(default_factory=Path.cwd)
@@ -112,6 +116,13 @@ class Config(BaseModel):
             except ValueError:
                 return default
 
+        overrides: dict[str, tuple[str, str]] = {}
+        for task in ("plan", "code", "explore", "research", "design", "review", "summarize"):
+            val = os.environ.get(f"ROUTE_{task.upper()}", "")
+            if ":" in val:
+                prov, model = val.split(":", 1)
+                overrides[task] = (prov.strip(), model.strip())
+
         return cls(
             llm_provider=os.environ.get("LLM_PROVIDER", "anthropic"),  # type: ignore[arg-type]
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
@@ -122,6 +133,7 @@ class Config(BaseModel):
             anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
             openai_model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
             google_model=os.environ.get("GOOGLE_MODEL", "gemini-2.0-flash"),
+            model_overrides=overrides,
             neo4j_uri=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
             neo4j_user=os.environ.get("NEO4J_USER", "neo4j"),
             neo4j_password=os.environ.get("NEO4J_PASSWORD"),

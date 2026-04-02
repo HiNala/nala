@@ -1147,6 +1147,8 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/compact",
     // ── Settings ──
     "/model",
+    "/models",
+    "/models refresh",
     "/doctor",
     // ── General ──
     "/scan",

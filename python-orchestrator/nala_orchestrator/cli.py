@@ -1331,6 +1331,37 @@ async def handle_request(
             text = "**Next steps:**\n" + "\n".join(f"  - {c}" for c in choices)
             _stream_text(req_id, text)
 
+    # ── Models registry (P7-01) ──────────────────────────────────────
+
+    elif req_type == "models_list":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            await _agent_manager.ensure_registry()
+            _stream_text(req_id, _agent_manager.models_report())
+
+    elif req_type == "models_refresh":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, "Refreshing model registry — probing all providers...")
+            await _agent_manager.refresh_registry()
+            _stream_text(req_id, _agent_manager.models_report())
+
+    elif req_type == "models_route":
+        task_name = req.get("task", "").strip()
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            await _agent_manager.ensure_registry()
+            from nala_orchestrator.models.types import TaskType as TT
+            valid = {t.value for t in TT}
+            if task_name not in valid:
+                _stream_text(req_id, f"Unknown task type. Valid: {', '.join(sorted(valid))}")
+            else:
+                prov, model = _agent_manager.route_task(TT(task_name))
+                _stream_text(req_id, f"**{task_name}** → `{prov}` / `{model}`")
+
     else:
         write_response({"id": req_id, "type": "error", "text": f"Unknown type: {req_type}"})
 

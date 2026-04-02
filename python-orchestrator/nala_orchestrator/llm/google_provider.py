@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 class GoogleProvider(BaseLLMProvider):
     """Provider for Google's Gemini models."""
 
-    def __init__(self, config: Config) -> None:
-        super().__init__(config)
+    def __init__(self, config: Config, model_override: str | None = None) -> None:
+        super().__init__(config, model_override=model_override)
         try:
             import google.generativeai as genai
             genai.configure(api_key=config.google_api_key or "")

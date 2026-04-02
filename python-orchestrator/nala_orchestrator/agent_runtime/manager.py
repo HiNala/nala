@@ -11,6 +11,9 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..models.registry import ModelRegistry
+from ..models.router import ModelRouter
+from ..models.types import TaskType
 from ..research.service import ResearchService
 from ..skills.registry import SkillRegistry
 from .state import AgentPhase, AgentPlan, AgentRun, AutonomyLevel, load_run, save_run
@@ -50,6 +53,20 @@ class AgentManager:
         self._mode: str = "plan"
         self.skills = SkillRegistry(project_root)
         self.research = ResearchService(config, project_root, orchestrator)
+
+        # Multi-model routing
+        self.model_registry = ModelRegistry(config)
+        task_overrides = {
+            TaskType(k): v for k, v in config.model_overrides.items()
+            if k in {t.value for t in TaskType}
+        }
+        self.model_router = ModelRouter(
+            self.model_registry,
+            overrides=task_overrides or None,
+            primary_provider=config.llm_provider,
+            primary_model=config.active_model(),
+        )
+
         self._checkpoints: list[dict] = []
         self._pending_choices: list[str] = []
         run_id = self._run.run_id if self._run else ""
@@ -74,6 +91,26 @@ class AgentManager:
     def set_orchestrator(self, orch: AgentOrchestrator) -> None:
         self.toolbox.set_orchestrator(orch)
         self.research.set_orchestrator(orch)
+
+    async def ensure_registry(self) -> None:
+        """Load or build the model registry (called on first /models or agent launch)."""
+        await self.model_registry.ensure_loaded()
+
+    async def refresh_registry(self) -> None:
+        """Force-rebuild the model registry by probing all providers."""
+        await self.model_registry.refresh()
+
+    def models_report(self) -> str:
+        """Human-readable report of available models + routing table."""
+        parts = [self.model_registry.format_status_report()]
+        parts.append("")
+        parts.append(self.model_router.format_routing_table())
+        return "\n".join(parts)
+
+    def route_task(self, task_type: TaskType) -> tuple[str, str]:
+        """Return (provider, model_id) for a task type."""
+        result = self.model_router.route(task_type)
+        return result.provider.value, result.model_id
 
     def set_task_ledger(self, ledger: TaskLedger) -> None:
         self.toolbox.set_task_ledger(ledger)
