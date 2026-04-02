@@ -838,6 +838,14 @@ async def handle_request(
             else:
                 _stream_text(req_id, "No active task to complete.")
 
+    # ── Undo last action batch ──────────────────────────────────────────
+    elif req_type == "undo_actions":
+        if _action_executor is None or not _action_executor.has_rollback:
+            _stream_text(req_id, "Nothing to undo.")
+        else:
+            messages = _action_executor.rollback_last_batch()
+            _stream_text(req_id, "\n".join(messages) if messages else "Rollback complete.")
+
     # ── Startup intelligence (on-demand refresh) ────────────────────────
     elif req_type == "startup_intelligence":
         try:

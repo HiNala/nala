@@ -114,6 +114,7 @@ impl App {
             "/clear" => {
                 self.messages.clear();
             }
+            "/undo" => self.undo_actions(),
             "/diff" => self.git_diff(),
             "/branch" => self.git_branch(),
             "/status" => self.git_status(),
@@ -157,6 +158,7 @@ impl App {
             "  /hover <file:l:c>      — LSP hover docs\n",
             "  /lsp status            — show LSP server status for this repo\n",
             "  /act <instruction>     — ask AI to make changes (with diff preview + confirm)\n",
+            "  /undo                  — revert the last batch of applied actions\n",
             "  /graph                 — show Neo4j code graph statistics\n",
             "  /team <objective>      — start a multi-agent team run\n",
             "  /team status           — show current team run status\n",
@@ -684,7 +686,7 @@ impl App {
         } else {
             format!("{} / {}", self.llm_provider, self.llm_model)
         };
-        let text = format!(
+        let mut text = format!(
             "Environment diagnostics:\n\
              \x20 Project root:    {}\n\
              \x20 Analysis scope:  {}\n\
@@ -705,6 +707,21 @@ impl App {
             self.stats.total_functions,
             self.dashboard_default_port
         );
+        if let Some(intel) = &self.startup_intel {
+            if !intel.project_types.is_empty() {
+                text.push_str(&format!(
+                    "\n  Project type:   {}", intel.project_types.join(", ")
+                ));
+            }
+            if !intel.git_branch.is_empty() {
+                text.push_str(&format!("\n  Git branch:     {}", intel.git_branch));
+                if intel.git_uncommitted > 0 {
+                    text.push_str(&format!(
+                        " ({} uncommitted)", intel.git_uncommitted
+                    ));
+                }
+            }
+        }
         self.push_message(Message::assistant(text));
     }
 
@@ -920,6 +937,22 @@ impl App {
                 let _ = tx
                     .send(BackgroundEvent::AssistantError(e.to_string()))
                     .await;
+            }
+        });
+    }
+
+    // ── Undo ───────────────────────────────────────────────────────────
+
+    fn undo_actions(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.push_message(Message::system("Rolling back last action batch..."));
+        tokio::spawn(async move {
+            if let Err(e) = bridge.undo_actions().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
             }
         });
     }

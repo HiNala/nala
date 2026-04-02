@@ -60,10 +60,20 @@ Keep responses focused and actionable. The developer is experienced — skip bas
 
 # Extra instructions appended when the user explicitly requests actions
 ACTION_PROMPT_EXTENSION = """
-## Inline Actions
+## Structured Action Response
 
 When the user asks you to *make a change*, *fix*, *refactor*, or *create* something,
-embed structured action blocks in your response using this exact XML format:
+respond in this exact order:
+
+### Step 1 — Plan (always output this first)
+Start your response with a brief plan:
+- What files will be changed and why
+- What the intended outcome is
+- Any risks or side effects to be aware of
+- What verification the user should run afterward (tests, lints, etc.)
+
+### Step 2 — Action blocks
+After the plan, emit structured action blocks using this exact XML format:
 
 <action type="edit" file="relative/path/to/file.py">
 <old>
@@ -87,13 +97,16 @@ full content of the new file
 <description>Install required dependency</description>
 </action>
 
+### Step 3 — Verification summary
+End with a "Verify" section listing the exact commands to run
+(e.g. `cargo test`, `pytest`, `ruff check`) to confirm the changes work.
+
 Rules for inline actions:
 - Only emit actions when the user explicitly asks for a change to be made
 - Use exact verbatim text for <old> — never paraphrase or reformat
-- Explain your reasoning in plain text BEFORE the action block
+- Explain your reasoning in the plan BEFORE the action blocks
 - One action block per logical change; do not batch unrelated changes
 - Never emit a delete action unless the user explicitly asks to remove a file
-- After your action blocks, tell the user what they should verify once applied
 """
 
 
@@ -216,6 +229,10 @@ class AgentOrchestrator:
         summary = self._bg_summary.get_summary_text()
         if summary and summary != "(no session summary yet)":
             base = base + "\n\n" + summary
+        from ..repo_detect import commands_summary
+        cmds = commands_summary(Path(self.context.project_root))
+        if cmds:
+            base = base + "\n\n" + cmds
         return base
 
     # ── Context window management ──────────────────────────────────────────

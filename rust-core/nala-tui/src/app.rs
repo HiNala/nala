@@ -966,6 +966,7 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/handoff",
     "/handoff save",
     "/handoff history",
+    "/undo",
     "/diff",
     "/branch",
     "/status",

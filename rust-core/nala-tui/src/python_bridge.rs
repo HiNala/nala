@@ -100,6 +100,8 @@ pub enum BridgeRequest {
         total_symbols: usize,
         symbols: Vec<nala_indexer::Symbol>,
     },
+    /// Undo last action batch.
+    UndoActions,
     /// Git diff summary.
     GitDiff,
     /// Git branch info.
@@ -330,6 +332,12 @@ impl PythonBridge {
         self.request_tx
             .send(BridgeRequest::MemoryForget { target })
             .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Undo the last batch of applied actions.
+    pub async fn undo_actions(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::UndoActions).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -635,6 +643,10 @@ async fn bridge_task(
                                 "total_files": total_files,
                                 "total_symbols": total_symbols,
                                 "symbols": symbols,
+                            }),
+                            BridgeRequest::UndoActions => json!({
+                                "id": id,
+                                "type": "undo_actions",
                             }),
                             BridgeRequest::GitDiff => json!({
                                 "id": id,

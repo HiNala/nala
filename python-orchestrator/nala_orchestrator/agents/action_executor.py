@@ -30,11 +30,15 @@ _SHELL_TIMEOUT = 30  # seconds
 
 
 class ActionExecutor:
-    """Applies confirmed actions to the file system."""
+    """Applies confirmed actions to the file system.
+
+    Maintains a rollback log so the last batch of changes can be reverted.
+    """
 
     def __init__(self, project_root: Path) -> None:
         self.root = project_root.resolve()
         self._applied: int = 0
+        self._rollback_log: list[dict] = []
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -139,6 +143,11 @@ class ActionExecutor:
             path.write_text(new_text, encoding="utf-8")
         except OSError as exc:
             return ActionResult(action.action_id, False, str(exc))
+        self._rollback_log.append({
+            "type": "edit",
+            "path": str(path),
+            "original": text,
+        })
         return ActionResult(action.action_id, True, f"Edited {action.file_path}")
 
     def _apply_create(self, action: CreateAction) -> ActionResult:
@@ -156,6 +165,10 @@ class ActionExecutor:
             path.write_text(action.content, encoding="utf-8")
         except OSError as exc:
             return ActionResult(action.action_id, False, str(exc))
+        self._rollback_log.append({
+            "type": "create",
+            "path": str(path),
+        })
         return ActionResult(action.action_id, True, f"Created {action.file_path}")
 
     def _apply_delete(self, action: DeleteAction) -> ActionResult:
@@ -166,9 +179,15 @@ class ActionExecutor:
         if not path.exists():
             return ActionResult(action.action_id, False, f"File not found: {action.file_path}")
         try:
+            original = path.read_text(encoding="utf-8")
             path.unlink()
         except OSError as exc:
             return ActionResult(action.action_id, False, str(exc))
+        self._rollback_log.append({
+            "type": "delete",
+            "path": str(path),
+            "original": original,
+        })
         return ActionResult(action.action_id, True, f"Deleted {action.file_path}")
 
     def _apply_shell(self, action: ShellAction) -> ActionResult:
@@ -205,3 +224,38 @@ class ActionExecutor:
             )
         except Exception as exc:
             return ActionResult(action.action_id, False, str(exc))
+
+    # ── Rollback ────────────────────────────────────────────────────────
+
+    def rollback_last_batch(self) -> list[str]:
+        """Undo all actions in the rollback log (most recent first).
+
+        Returns a list of human-readable messages describing what was reverted.
+        """
+        messages: list[str] = []
+        for entry in reversed(self._rollback_log):
+            try:
+                if entry["type"] == "edit":
+                    Path(entry["path"]).write_text(
+                        entry["original"], encoding="utf-8"
+                    )
+                    messages.append(f"Reverted edit: {entry['path']}")
+                elif entry["type"] == "create":
+                    p = Path(entry["path"])
+                    if p.exists():
+                        p.unlink()
+                        messages.append(f"Removed created file: {entry['path']}")
+                elif entry["type"] == "delete":
+                    p = Path(entry["path"])
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(entry["original"], encoding="utf-8")
+                    messages.append(f"Restored deleted file: {entry['path']}")
+            except OSError as exc:
+                messages.append(f"Rollback failed for {entry['path']}: {exc}")
+        self._rollback_log.clear()
+        return messages
+
+    @property
+    def has_rollback(self) -> bool:
+        """Whether there are actions that can be rolled back."""
+        return len(self._rollback_log) > 0
