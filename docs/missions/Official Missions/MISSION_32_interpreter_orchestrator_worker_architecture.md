@@ -174,12 +174,12 @@ Store parent/child run metadata so sessions can be resumed and users can reattac
 
 ## Acceptance Criteria
 
-- [ ] The architecture clearly separates interpreter, orchestrator, and worker responsibilities
-- [ ] The main terminal remains the stable user-facing interpreter
-- [ ] `/agent` owns planning and delegation
-- [ ] Worker count is capped at 3
-- [ ] Workers cannot recursively spawn more workers by default
-- [ ] Parent/child relationships are persisted for later attach/resume flows
+- [x] The architecture clearly separates interpreter, orchestrator, and worker responsibilities
+- [x] The main terminal remains the stable user-facing interpreter
+- [x] `/agent` owns planning and delegation
+- [x] Worker count is capped at 3
+- [x] Workers cannot recursively spawn more workers by default
+- [x] Parent/child relationships are persisted for later attach/resume flows
 
 ## Estimated Complexity
 

@@ -159,3 +159,139 @@ def full_status(root: Path) -> str:
     lines.append("")
     lines.append(diff_summary(root))
     return "\n".join(lines)
+
+
+# ── Branch comparison ──────────────────────────────────────────────────
+
+def branch_compare(root: Path, base: str, head: str = "HEAD") -> str:
+    """Compare two branches/revisions and return a human-readable summary."""
+    if not is_git_repo(root):
+        return "Not a git repository."
+
+    count_raw = _run(
+        ["git", "rev-list", "--count", f"{base}..{head}"], root,
+    )
+    commit_count = int(count_raw) if count_raw and count_raw.isdigit() else 0
+
+    stat = _run(["git", "diff", "--stat", f"{base}...{head}"], root)
+    log_raw = _run(
+        ["git", "log", "--oneline", "--max-count=15", f"{base}..{head}"],
+        root,
+    )
+
+    lines = [f"**Comparing** `{base}` → `{head}` ({commit_count} commits)"]
+    if log_raw:
+        lines.append("\n**Commits:**")
+        for log_line in log_raw.splitlines()[:15]:
+            lines.append(f"  {log_line}")
+    if stat:
+        lines.append(f"\n**Files changed:**\n{stat}")
+    return "\n".join(lines)
+
+
+def commit_diff(root: Path, rev_a: str, rev_b: str = "") -> str:
+    """Return diff between two revisions, or show a single commit's diff."""
+    if not is_git_repo(root):
+        return "Not a git repository."
+    if rev_b:
+        raw = _run(["git", "diff", "--stat", rev_a, rev_b], root)
+        patch = _run(["git", "diff", "--shortstat", rev_a, rev_b], root)
+    else:
+        raw = _run(["git", "show", "--stat", rev_a], root)
+        patch = _run(["git", "show", "--shortstat", rev_a], root)
+    lines = []
+    if raw:
+        lines.append(raw)
+    if patch:
+        lines.append(f"\n{patch}")
+    return "\n".join(lines) if lines else "No diff available."
+
+
+def blame_summary(root: Path, file_path: str, start: int = 1, end: int = 0) -> str:
+    """Return git blame summary for a file (or line range)."""
+    if not is_git_repo(root):
+        return "Not a git repository."
+    args = ["git", "blame", "--line-porcelain"]
+    if end > 0:
+        args.extend([f"-L{start},{end}"])
+    args.append(file_path)
+    raw = _run(args, root, timeout=10)
+    if not raw:
+        return f"No blame data for {file_path}"
+
+    authors: dict[str, int] = {}
+    for line in raw.splitlines():
+        if line.startswith("author "):
+            author = line[7:].strip()
+            authors[author] = authors.get(author, 0) + 1
+
+    total = sum(authors.values())
+    sorted_authors = sorted(authors.items(), key=lambda x: -x[1])
+    lines = [f"**Blame for `{file_path}`** ({total} lines)"]
+    for author, count in sorted_authors[:10]:
+        pct = count * 100 // total if total else 0
+        lines.append(f"  {author}: {count} lines ({pct}%)")
+    return "\n".join(lines)
+
+
+# ── Worktree support ──────────────────────────────────────────────────
+
+def list_worktrees(root: Path) -> list[dict]:
+    """Return a list of active git worktrees."""
+    raw = _run(["git", "worktree", "list", "--porcelain"], root)
+    if not raw:
+        return []
+    trees: list[dict] = []
+    current: dict = {}
+    for line in raw.splitlines():
+        if line.startswith("worktree "):
+            if current:
+                trees.append(current)
+            current = {"path": line[9:].strip()}
+        elif line.startswith("HEAD "):
+            current["head"] = line[5:].strip()[:8]
+        elif line.startswith("branch "):
+            current["branch"] = line[7:].strip().replace("refs/heads/", "")
+        elif line == "bare":
+            current["bare"] = True
+    if current:
+        trees.append(current)
+    return trees
+
+
+def create_worktree(root: Path, label: str, branch: str = "") -> str | None:
+    """Create a new git worktree. Returns the path or None on failure."""
+    wt_dir = root / ".nala" / "worktrees" / label
+    wt_dir.parent.mkdir(parents=True, exist_ok=True)
+    args = ["git", "worktree", "add"]
+    if branch:
+        args.extend(["-b", branch])
+    else:
+        args.extend(["-b", f"nala/{label}"])
+    args.append(str(wt_dir))
+    result = _run(args, root, timeout=15)
+    if result is not None or wt_dir.exists():
+        return str(wt_dir)
+    return None
+
+
+def cleanup_worktree(root: Path, label: str) -> bool:
+    """Remove a worktree and its branch."""
+    wt_dir = root / ".nala" / "worktrees" / label
+    result = _run(["git", "worktree", "remove", str(wt_dir), "--force"], root)
+    branch = f"nala/{label}"
+    _run(["git", "branch", "-D", branch], root)
+    return result is not None or not wt_dir.exists()
+
+
+def worktree_status(root: Path) -> str:
+    """Human-readable worktree summary."""
+    trees = list_worktrees(root)
+    if len(trees) <= 1:
+        return "No additional worktrees."
+    lines = [f"**Worktrees** ({len(trees)} total)"]
+    for t in trees:
+        branch = t.get("branch", "detached")
+        head = t.get("head", "")
+        lines.append(f"  {branch} @ {head} → {t['path']}")
+    return "\n".join(lines)

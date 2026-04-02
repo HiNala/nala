@@ -176,6 +176,7 @@ pub enum BackgroundEvent {
         task_id: String,
         plan_steps: Vec<String>,
         verification_summary: String,
+        workers: Vec<String>,
     },
 }
 
@@ -233,6 +234,7 @@ pub struct App {
     pub agent_mode: String,
     pub agent_task_id: String,
     pub agent_verification_summary: String,
+    pub agent_workers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -376,6 +378,7 @@ impl App {
             agent_mode: "plan".to_string(),
             agent_task_id: String::new(),
             agent_verification_summary: String::new(),
+            agent_workers: Vec::new(),
         })
     }
 
@@ -1001,6 +1004,7 @@ impl App {
                 task_id,
                 plan_steps,
                 verification_summary,
+                workers,
             } => {
                 self.agent_run_id = run_id;
                 self.agent_phase = phase.clone();
@@ -1010,6 +1014,7 @@ impl App {
                 self.agent_task_id = task_id;
                 self.agent_plan_steps = plan_steps;
                 self.agent_verification_summary = verification_summary;
+                self.agent_workers = workers;
                 if phase == "idle" || phase == "done" || phase == "cancelled" {
                     if self.agent_panel_open && phase != "idle" {
                         // keep panel open so user sees final state
@@ -1109,6 +1114,19 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/agent mode plan",
     "/agent mode patch",
     "/agent mode autonomous",
+    // ── Worker commands ──
+    "/agent workers",
+    "/agent attach",
+    "/agent detach",
+    "/agent message",
+    "/agent cancel-worker",
+    // ── SCM / Git ──
+    "/agent scm",
+    "/agent compare",
+    "/agent blame",
+    "/agent worktree list",
+    "/agent worktree create",
+    "/agent worktree cleanup",
     // ── Stable commands ──
     "/help",
     "/scan",

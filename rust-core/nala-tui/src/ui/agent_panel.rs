@@ -171,6 +171,28 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(theme::GRAY),
                 ))));
             }
+            items.push(ListItem::new(Line::from("")));
+        }
+
+        if !app.agent_workers.is_empty() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Workers:",
+                Style::default()
+                    .fg(theme::WHITE)
+                    .add_modifier(Modifier::BOLD),
+            ))));
+            for wline in app.agent_workers.iter().take(6) {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    truncate(wline, max_w),
+                    Style::default().fg(theme::CYAN),
+                ))));
+            }
+            if app.agent_workers.len() > 6 {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("  +{} more", app.agent_workers.len() - 6),
+                    Style::default().fg(theme::GRAY),
+                ))));
+            }
         }
     }
 

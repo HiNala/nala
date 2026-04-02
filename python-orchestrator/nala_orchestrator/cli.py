@@ -260,9 +260,14 @@ def _broadcast_agent_state(req_id: str) -> None:
             "task_id": "",
             "plan_steps": [],
             "verification_summary": "",
+            "workers": [],
         })
         return
     run = _agent_manager.current_run
+    worker_lines: list[str] = []
+    if hasattr(_agent_manager, "_workers"):
+        for w in _agent_manager._workers.list_all():
+            worker_lines.append(w.status_line())
     write_response({
         "id": req_id,
         "type": "agent_state",
@@ -276,6 +281,7 @@ def _broadcast_agent_state(req_id: str) -> None:
         "verification_summary": (
             run.verification.summary() if run.verification else ""
         ),
+        "workers": worker_lines,
     })
 
 
@@ -1185,6 +1191,83 @@ async def handle_request(
         _agent_manager.set_mode(mode)
         _stream_text(req_id, f"Agent autonomy mode set to **{mode.upper()}**.")
         _broadcast_agent_state(req_id)
+
+    # ── Worker commands (M33) ──────────────────────────────────────────
+
+    elif req_type == "agent_workers":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.list_workers())
+
+    elif req_type == "agent_worker_detail":
+        wid = req.get("worker_id", "").strip()
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.get_worker_detail(wid))
+
+    elif req_type == "agent_worker_message":
+        wid = req.get("worker_id", "").strip()
+        text = req.get("text", "").strip()
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.send_to_worker(wid, text))
+
+    elif req_type == "agent_worker_cancel":
+        wid = req.get("worker_id", "").strip()
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            msg = _agent_manager.cancel_worker(wid)
+            _stream_text(req_id, msg)
+            _broadcast_agent_state(req_id)
+
+    # ── SCM / Git review (M34) ────────────────────────────────────────
+
+    elif req_type == "agent_scm":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.scm_overview())
+
+    elif req_type == "agent_branch_compare":
+        base = req.get("base", "main").strip()
+        head = req.get("head", "HEAD").strip()
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.branch_review(base, head))
+
+    elif req_type == "agent_blame":
+        fpath = req.get("file", "").strip()
+        start = int(req.get("start", 1))
+        end = int(req.get("end", 0))
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.blame_file(fpath, start, end))
+
+    elif req_type == "agent_worktree_list":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.worktree_list())
+
+    elif req_type == "agent_worktree_create":
+        label = req.get("label", "").strip()
+        if _agent_manager is None or not label:
+            _stream_text(req_id, "Agent runtime not ready or missing label.")
+        else:
+            _stream_text(req_id, _agent_manager.worktree_create(label))
+
+    elif req_type == "agent_worktree_cleanup":
+        label = req.get("label", "").strip()
+        if _agent_manager is None or not label:
+            _stream_text(req_id, "Agent runtime not ready or missing label.")
+        else:
+            _stream_text(req_id, _agent_manager.worktree_cleanup(label))
 
     else:
         write_response({"id": req_id, "type": "error", "text": f"Unknown type: {req_type}"})

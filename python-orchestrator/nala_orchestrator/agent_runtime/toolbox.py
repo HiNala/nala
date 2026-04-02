@@ -106,6 +106,11 @@ class Toolbox:
             self._lead_agent = None
         return "Team run cancelled."
 
+    def send_worker_message(self, worker_id: str, message: str) -> None:
+        """Forward a message to a worker via the message bus."""
+        lead = self._ensure_lead()
+        lead.bus.send("orchestrator", worker_id, message)
+
     # ── Analysis ──────────────────────────────────────────────────────
 
     async def run_analysis(self, perspective: str = "quick") -> str:

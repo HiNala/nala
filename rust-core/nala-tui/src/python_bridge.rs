@@ -128,6 +128,18 @@ pub enum BridgeRequest {
     AgentResume,
     AgentApprove { approved: bool },
     AgentMode { mode: String },
+    // ── Worker commands (M33) ──────────────────────────────────────
+    AgentWorkers,
+    AgentWorkerDetail { worker_id: String },
+    AgentWorkerMessage { worker_id: String, text: String },
+    AgentWorkerCancel { worker_id: String },
+    // ── SCM / Git review (M34) ─────────────────────────────────────
+    AgentScm,
+    AgentBranchCompare { base: String, head: String },
+    AgentBlame { file: String, start: u32, end: u32 },
+    AgentWorktreeList,
+    AgentWorktreeCreate { label: String },
+    AgentWorktreeCleanup { label: String },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -449,6 +461,56 @@ impl PythonBridge {
 
     pub async fn agent_mode(&self, mode: String) -> Result<()> {
         self.request_tx.send(BridgeRequest::AgentMode { mode }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_workers(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentWorkers).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_worker_detail(&self, worker_id: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentWorkerDetail { worker_id }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_worker_message(&self, worker_id: String, text: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentWorkerMessage { worker_id, text }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_worker_cancel(&self, worker_id: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentWorkerCancel { worker_id }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_scm(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentScm).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_branch_compare(&self, base: String, head: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentBranchCompare { base, head }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_blame(&self, file: String, start: u32, end: u32) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentBlame { file, start, end }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_worktree_list(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentWorktreeList).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_worktree_create(&self, label: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentWorktreeCreate { label }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_worktree_cleanup(&self, label: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentWorktreeCleanup { label }).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -795,6 +857,57 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "agent_mode",
                                 "mode": mode,
+                            }),
+                            BridgeRequest::AgentWorkers => json!({
+                                "id": id,
+                                "type": "agent_workers",
+                            }),
+                            BridgeRequest::AgentWorkerDetail { worker_id } => json!({
+                                "id": id,
+                                "type": "agent_worker_detail",
+                                "worker_id": worker_id,
+                            }),
+                            BridgeRequest::AgentWorkerMessage { worker_id, text } => json!({
+                                "id": id,
+                                "type": "agent_worker_message",
+                                "worker_id": worker_id,
+                                "text": text,
+                            }),
+                            BridgeRequest::AgentWorkerCancel { worker_id } => json!({
+                                "id": id,
+                                "type": "agent_worker_cancel",
+                                "worker_id": worker_id,
+                            }),
+                            BridgeRequest::AgentScm => json!({
+                                "id": id,
+                                "type": "agent_scm",
+                            }),
+                            BridgeRequest::AgentBranchCompare { base, head } => json!({
+                                "id": id,
+                                "type": "agent_branch_compare",
+                                "base": base,
+                                "head": head,
+                            }),
+                            BridgeRequest::AgentBlame { file, start, end } => json!({
+                                "id": id,
+                                "type": "agent_blame",
+                                "file": file,
+                                "start": start,
+                                "end": end,
+                            }),
+                            BridgeRequest::AgentWorktreeList => json!({
+                                "id": id,
+                                "type": "agent_worktree_list",
+                            }),
+                            BridgeRequest::AgentWorktreeCreate { label } => json!({
+                                "id": id,
+                                "type": "agent_worktree_create",
+                                "label": label,
+                            }),
+                            BridgeRequest::AgentWorktreeCleanup { label } => json!({
+                                "id": id,
+                                "type": "agent_worktree_cleanup",
+                                "label": label,
                             }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
@@ -1156,6 +1269,10 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 .unwrap_or_default();
             let verification_summary = msg.get("verification_summary")
                 .and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let workers: Vec<String> = msg.get("workers")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
             let _ = bg_tx.send(BackgroundEvent::AgentStateUpdated {
                 run_id,
                 phase,
@@ -1165,6 +1282,7 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 task_id,
                 plan_steps,
                 verification_summary,
+                workers,
             }).await;
         }
         _ => {}

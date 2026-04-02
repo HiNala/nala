@@ -25,6 +25,10 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 - **Project brief + scoped guidance** — durable `.nala/agent/project-brief.md` and per-directory scopes auto-loaded into agent context
 - **Verification recipes** — auto-detects Rust (`cargo check/test`), Python (`ruff/pytest`), Node (`npm test/lint`) commands
 - **Approval workflow** — `/agent approve` / `/agent reject` gates before execution
+- **Worker architecture** — interpreter/orchestrator/worker three-layer model with up to 3 parallel workers per run
+- **Worker management** — `/agent workers`, `/agent attach`, `/agent message`, `/agent cancel-worker` for full worker control
+- **Git integration** — `/agent scm`, `/agent compare`, `/agent blame`, branch comparison, worktree support
+- **Worktree isolation** — spawn workers in isolated git worktrees for safe parallel edits
 - **Action mode** — `/agent <instruction>` to propose file edits with diff preview + y/n confirmation
 - **Context window management** — `/context` usage, `/compact` compaction with handoff docs
 - **Clipboard paste** — bracketed paste support for pasting text from clipboard into input
@@ -120,6 +124,27 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `/agent stop` | Cancel the active run |
 | `/agent resume` | Resume a paused or blocked run |
 | `/agent mode <level>` | Set autonomy: `observe`, `plan`, `patch`, `autonomous` |
+
+**Workers (Multi-Agent):**
+
+| Command | Description |
+|---------|-------------|
+| `/agent workers` | List active workers |
+| `/agent attach <id>` | Inspect a worker's context |
+| `/agent detach` | Return to main interpreter |
+| `/agent message <id> <text>` | Send a message to a worker |
+| `/agent cancel-worker <id>` | Cancel a running worker |
+
+**SCM / Git Integration:**
+
+| Command | Description |
+|---------|-------------|
+| `/agent scm` | Full SCM overview (branch, dirty state, worktrees) |
+| `/agent compare [base] [head]` | Branch comparison summary |
+| `/agent blame <file> [start] [end]` | Git blame summary |
+| `/agent worktree list` | List active worktrees |
+| `/agent worktree create <label>` | Create an isolated worktree for a worker |
+| `/agent worktree cleanup <label>` | Remove a worktree and its branch |
 
 **Code Intelligence:**
 
@@ -256,8 +281,10 @@ nala/
 │       ├── perspectives/   Analysis engines (complexity, security, churn, …)
 │       ├── sessions/       Session management and report generation
 │       ├── agents/         LLM query orchestration, action extraction/execution
-│       ├── agent_runtime/  Central control plane: manager, state, toolbox
-│       └── skills/         Reusable agent workflow recipes (built-in + user)
+│       ├── agent_runtime/  Central control plane: manager, state, toolbox, workers
+│       ├── skills/         Reusable agent workflow recipes (built-in + user)
+│       ├── git_ops.py      Git operations (status, diff, blame, worktrees)
+│       └── git_review.py   Review flows (branch review, SCM overview)
 ├── dashboard/              Optional FastAPI + D3.js web dashboard
 ├── scripts/                Setup and benchmark scripts
 └── docs/missions/          Complete build plan (26 missions)
@@ -293,6 +320,7 @@ The build is structured through Mission 26 (and growing). Each mission is in `do
 | Context & Memory | 20-24 | Context mgmt, memory, handoff, multi-agent, compression |
 | Objective Agent | 25-28 | Objective-driven workflows, command surface, control plane |
 | Agent UX | 29-31 | Agent workbench TUI, autonomous loop, skills & memory |
+| Multi-Agent & Git | 32-34 | Worker architecture, attach flow, git integration & worktrees |
 
 ---
 

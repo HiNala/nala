@@ -124,12 +124,12 @@ The user should always have an easy way back, such as:
 
 ## Acceptance Criteria
 
-- [ ] The orchestrator can spawn up to 3 worker terminals or terminal-like sessions
-- [ ] The main terminal shows concise summaries for each worker
-- [ ] The user can list, attach to, message, and cancel workers
-- [ ] The user can always return to the main interpreter cleanly
-- [ ] Worker logs do not flood the main terminal
-- [ ] Parent/child session identity remains visible and consistent
+- [x] The orchestrator can spawn up to 3 worker terminals or terminal-like sessions
+- [x] The main terminal shows concise summaries for each worker
+- [x] The user can list, attach to, message, and cancel workers
+- [x] The user can always return to the main interpreter cleanly
+- [x] Worker logs do not flood the main terminal
+- [x] Parent/child session identity remains visible and consistent
 
 ## Estimated Complexity
 

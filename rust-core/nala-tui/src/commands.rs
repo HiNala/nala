@@ -1219,7 +1219,7 @@ impl App {
                     "## /agent — Autonomous Workflow\n\n\
                      **Quick start:** `/agent <objective>` to begin an objective-driven run.\n\n\
                      **Subcommands:**\n\
-                     - `/agent <objective>`  — start or resume an objective-driven agent run\n\
+                     - `/agent <objective>`  — start an objective-driven agent run\n\
                      - `/agent plan [topic]` — create or refresh a plan without executing\n\
                      - `/agent run`          — execute the current plan\n\
                      - `/agent review`       — review current diff and pending changes\n\
@@ -1231,6 +1231,19 @@ impl App {
                      - `/agent stop`         — cancel the active run\n\
                      - `/agent resume`       — resume a paused or blocked run\n\
                      - `/agent mode <level>` — set autonomy: observe, plan, patch, autonomous\n\n\
+                     **Workers:**\n\
+                     - `/agent workers`                  — list active workers\n\
+                     - `/agent attach <worker-id>`       — inspect a worker's context\n\
+                     - `/agent detach`                   — return to interpreter\n\
+                     - `/agent message <id> <text>`      — send a message to a worker\n\
+                     - `/agent cancel-worker <id>`       — cancel a running worker\n\n\
+                     **SCM / Git:**\n\
+                     - `/agent scm`                      — full SCM overview\n\
+                     - `/agent compare [base] [head]`    — branch comparison\n\
+                     - `/agent blame <file> [s] [e]`     — git blame summary\n\
+                     - `/agent worktree list`            — list worktrees\n\
+                     - `/agent worktree create <label>`  — create an isolated worktree\n\
+                     - `/agent worktree cleanup <label>` — remove a worktree\n\n\
                      **Workflow:** plan → approve → run → review → verify → done.\n\
                      **Keybindings:** `Ctrl+G` toggles the agent workbench panel.",
                 ));
@@ -1335,6 +1348,123 @@ impl App {
                 self.agent_dispatch(move |b, _tx| async move {
                     b.agent_start(objective).await.map_err(|e| e.to_string())
                 });
+            }
+            // ── Worker commands (M33) ────────────────────────────────
+            "workers" => {
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_workers().await.map_err(|e| e.to_string())
+                });
+            }
+            "attach" => {
+                if rest.is_empty() {
+                    self.push_message(Message::error("Usage: /agent attach <worker-id>"));
+                    return;
+                }
+                let wid = rest.to_string();
+                self.push_message(Message::system(format!("Attaching to worker {}...", rest)));
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_worker_detail(wid).await.map_err(|e| e.to_string())
+                });
+            }
+            "detach" => {
+                self.push_message(Message::system("Detached from worker. Back to interpreter."));
+            }
+            "message" => {
+                let mut msg_parts = rest.splitn(2, ' ');
+                let wid = msg_parts.next().unwrap_or("").trim().to_string();
+                let text = msg_parts.next().unwrap_or("").trim().to_string();
+                if wid.is_empty() || text.is_empty() {
+                    self.push_message(Message::error(
+                        "Usage: /agent message <worker-id> <text>",
+                    ));
+                    return;
+                }
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_worker_message(wid, text).await.map_err(|e| e.to_string())
+                });
+            }
+            "cancel-worker" => {
+                if rest.is_empty() {
+                    self.push_message(Message::error("Usage: /agent cancel-worker <worker-id>"));
+                    return;
+                }
+                let wid = rest.to_string();
+                self.push_message(Message::system(format!("Cancelling worker {}...", rest)));
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_worker_cancel(wid).await.map_err(|e| e.to_string())
+                });
+            }
+            // ── SCM / Git review (M34) ──────────────────────────────
+            "scm" => {
+                self.push_message(Message::system("Loading SCM overview..."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_scm().await.map_err(|e| e.to_string())
+                });
+            }
+            "compare" => {
+                let mut cmp_parts = rest.splitn(2, ' ');
+                let base = cmp_parts.next().unwrap_or("main").trim().to_string();
+                let head = cmp_parts.next().unwrap_or("HEAD").trim().to_string();
+                self.push_message(Message::system(format!(
+                    "Comparing {} → {}...", base, head
+                )));
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_branch_compare(base, head).await.map_err(|e| e.to_string())
+                });
+            }
+            "blame" => {
+                if rest.is_empty() {
+                    self.push_message(Message::error("Usage: /agent blame <file> [start] [end]"));
+                    return;
+                }
+                let blame_parts: Vec<&str> = rest.splitn(3, ' ').collect();
+                let file = blame_parts[0].to_string();
+                let start: u32 = blame_parts.get(1)
+                    .and_then(|s| s.parse().ok()).unwrap_or(1);
+                let end: u32 = blame_parts.get(2)
+                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_blame(file, start, end).await.map_err(|e| e.to_string())
+                });
+            }
+            "worktree" => {
+                let mut wt_parts = rest.splitn(2, ' ');
+                let wt_sub = wt_parts.next().unwrap_or("").trim();
+                let wt_rest = wt_parts.next().unwrap_or("").trim().to_string();
+                match wt_sub {
+                    "list" | "" => {
+                        self.agent_dispatch(|b, _tx| async move {
+                            b.agent_worktree_list().await.map_err(|e| e.to_string())
+                        });
+                    }
+                    "create" => {
+                        if wt_rest.is_empty() {
+                            self.push_message(Message::error(
+                                "Usage: /agent worktree create <label>",
+                            ));
+                            return;
+                        }
+                        self.agent_dispatch(move |b, _tx| async move {
+                            b.agent_worktree_create(wt_rest).await.map_err(|e| e.to_string())
+                        });
+                    }
+                    "cleanup" | "remove" => {
+                        if wt_rest.is_empty() {
+                            self.push_message(Message::error(
+                                "Usage: /agent worktree cleanup <label>",
+                            ));
+                            return;
+                        }
+                        self.agent_dispatch(move |b, _tx| async move {
+                            b.agent_worktree_cleanup(wt_rest).await.map_err(|e| e.to_string())
+                        });
+                    }
+                    _ => {
+                        self.push_message(Message::error(
+                            "Usage: /agent worktree <list|create|cleanup> [label]",
+                        ));
+                    }
+                }
             }
             _ => {
                 let objective = args.trim().to_string();

@@ -118,12 +118,12 @@ Worker runs that edit code should be able to opt into worktree isolation when:
 
 ## Acceptance Criteria
 
-- [ ] `/agent` can reason about current git status, branch divergence, and recent commits
-- [ ] The user can review the current run's diff from within Nala
-- [ ] Branch comparisons and commit-level summaries are available
-- [ ] Worktree-backed agent execution is supported for isolated runs
-- [ ] Parallel worker edits can be isolated safely
-- [ ] The roadmap's git integration priority is reflected in the implementation docs
+- [x] `/agent` can reason about current git status, branch divergence, and recent commits
+- [x] The user can review the current run's diff from within Nala
+- [x] Branch comparisons and commit-level summaries are available
+- [x] Worktree-backed agent execution is supported for isolated runs
+- [x] Parallel worker edits can be isolated safely
+- [x] The roadmap's git integration priority is reflected in the implementation docs
 
 ## Estimated Complexity
 

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from ..skills.registry import SkillRegistry
 from .state import AgentPhase, AgentPlan, AgentRun, AutonomyLevel, load_run, save_run
 from .toolbox import Toolbox
+from .workers import WorkerRegistry, WorkerRole, WorkerStatus
 
 if TYPE_CHECKING:
     from ..agents.orchestrator import AgentOrchestrator
@@ -47,6 +48,12 @@ class AgentManager:
             self._run = None
         self._mode: str = "plan"
         self.skills = SkillRegistry(project_root)
+        run_id = self._run.run_id if self._run else ""
+        self._workers = WorkerRegistry(run_id)
+        if self._run and self._run.workers:
+            self._workers = WorkerRegistry.from_list(
+                self._run.workers, run_id,
+            )
 
     # ── Accessors ─────────────────────────────────────────────────────
 
@@ -378,3 +385,117 @@ class AgentManager:
             yield chunk
         if self._run:
             self._transition(AgentPhase.REVIEWING)
+
+    # ── Worker management (M32/M33) ───────────────────────────────────
+
+    def spawn_worker(
+        self,
+        objective: str,
+        role: str = "implement",
+        scope: str = "",
+        use_worktree: bool = False,
+    ) -> str:
+        """Spawn a worker for the current run. Returns status message."""
+        if self._run is None:
+            return "No active agent run."
+        if not self._workers.can_spawn():
+            return "Worker limit reached (max 3). Cancel one first."
+
+        wt_path = ""
+        if use_worktree:
+            from .. import git_ops
+            label = f"worker-{self._workers.count + 1}"
+            path = git_ops.create_worktree(self.project_root, label)
+            if path:
+                wt_path = path
+
+        try:
+            worker_role = WorkerRole(role)
+        except ValueError:
+            worker_role = WorkerRole.IMPLEMENT
+
+        worker = self._workers.spawn(
+            objective=objective,
+            role=worker_role,
+            scope=scope,
+            worktree_path=wt_path,
+        )
+        if worker is None:
+            return "Failed to spawn worker."
+        self._run.workers = self._workers.to_list()
+        save_run(self.project_root, self._run)
+        return f"Spawned worker `{worker.worker_id}` ({worker.role.value}): {objective[:60]}"
+
+    def list_workers(self) -> str:
+        return self._workers.format_summary()
+
+    def cancel_worker(self, worker_id: str) -> str:
+        if self._workers.cancel(worker_id):
+            if self._run:
+                self._run.workers = self._workers.to_list()
+                save_run(self.project_root, self._run)
+            return f"Worker `{worker_id}` cancelled."
+        return f"Worker `{worker_id}` not found or already finished."
+
+    def send_to_worker(self, worker_id: str, message: str) -> str:
+        """Send a message to a worker (via message bus)."""
+        worker = self._workers.get(worker_id)
+        if worker is None:
+            return f"Worker `{worker_id}` not found."
+        if worker.status not in (WorkerStatus.PENDING, WorkerStatus.RUNNING):
+            return f"Worker `{worker_id}` is {worker.status.value}, cannot message."
+        self.toolbox.send_worker_message(worker_id, message)
+        return f"Message sent to `{worker_id}`."
+
+    def get_worker_detail(self, worker_id: str) -> str:
+        """Get detailed info for a worker (for attach view)."""
+        worker = self._workers.get(worker_id)
+        if worker is None:
+            return f"Worker `{worker_id}` not found."
+        lines = [
+            f"**Worker** `{worker.worker_id}`",
+            f"**Role:** {worker.role.value}",
+            f"**Status:** {worker.status.value}",
+            f"**Objective:** {worker.objective}",
+        ]
+        if worker.scope:
+            lines.append(f"**Scope:** {worker.scope}")
+        if worker.worktree_path:
+            lines.append(f"**Worktree:** {worker.worktree_path}")
+        if worker.result_summary:
+            lines.append(f"\n**Result:**\n{worker.result_summary}")
+        if worker.files_touched:
+            lines.append(f"**Files:** {', '.join(worker.files_touched)}")
+        return "\n".join(lines)
+
+    # ── Git review / SCM (M34) ────────────────────────────────────────
+
+    def scm_overview(self) -> str:
+        """Full SCM overview including worktrees."""
+        from .. import git_review
+        return git_review.scm_overview(self.project_root)
+
+    def branch_review(self, base: str = "main", head: str = "HEAD") -> str:
+        from .. import git_review
+        return git_review.branch_review(self.project_root, base, head)
+
+    def blame_file(self, file_path: str, start: int = 1, end: int = 0) -> str:
+        from .. import git_ops
+        return git_ops.blame_summary(self.project_root, file_path, start, end)
+
+    def worktree_list(self) -> str:
+        from .. import git_ops
+        return git_ops.worktree_status(self.project_root)
+
+    def worktree_create(self, label: str) -> str:
+        from .. import git_ops
+        path = git_ops.create_worktree(self.project_root, label)
+        if path:
+            return f"Created worktree `{label}` at `{path}`"
+        return f"Failed to create worktree `{label}`."
+
+    def worktree_cleanup(self, label: str) -> str:
+        from .. import git_ops
+        if git_ops.cleanup_worktree(self.project_root, label):
+            return f"Removed worktree `{label}`."
+        return f"Failed to remove worktree `{label}`."
