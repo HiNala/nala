@@ -76,6 +76,11 @@ impl LspManager {
         }
     }
 
+    /// Whether the server has completed the initialize handshake.
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
+    }
+
     /// Access the live diagnostics store (updated by the LSP server in the background).
     pub fn diagnostics(&self) -> &DiagnosticsStore {
         &self.diagnostics

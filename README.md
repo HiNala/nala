@@ -2,9 +2,21 @@
 
 > Terminal-first AI-powered coding environment. Fast, deep, keyboard-driven.
 
-Nala combines the speed of NeoVim, the intelligence of Cursor, the code-review depth of CodeRabbit, and the clean SSH-style boot of OpenCode — without Electron, without a browser, without the bloat.
+HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review depth of CodeRabbit, and the clean SSH-style boot of OpenCode — without Electron, without a browser, without the bloat.
 
 **Status:** Active development. See [docs/missions/](docs/missions/) for the full build plan.
+
+### What works today
+
+- **Instant codebase scanning** — hash-based change detection on 160+ file projects in < 0.05s
+- **Full Tree-sitter indexing** — extracts functions, classes, imports across Rust, Python, JS/TS, Go
+- **Custom TUI** with themed panels, branded top bar, file tree, session history, progress gauge
+- **Python AI bridge** — streams LLM responses (OpenAI, Anthropic, Google, Ollama) via IPC
+- **LSP integration** — go-to-definition, find-references, hover, live diagnostics
+- **Analysis perspectives** — security, complexity, churn, performance, dependency audits
+- **Session management** — save, resume, and review past analysis sessions
+- **Action mode** — `/act` to ask AI to propose file edits with diff preview + y/n confirmation
+- **Context window management** — `/context` usage, `/compact` compaction with handoff docs
 
 ### Terminal UI Highlights
 
@@ -108,6 +120,46 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `Esc` | Clear current input |
 | `Ctrl+C` / `Ctrl+Q` | Quit |
 | Mouse click | Open file panel, interact with UI |
+
+---
+
+## Testing on a Codebase
+
+You can point HiNala at **any** project folder and start exploring immediately:
+
+```bash
+# Navigate to any project you want to analyze
+cd ~/projects/my-app
+
+# Launch HiNala (it auto-targets the current directory)
+hinala
+
+# Or specify a path explicitly
+hinala -p /path/to/any/project
+```
+
+### Recommended first-run workflow
+
+1. Launch the TUI — it auto-scans and indexes on boot
+2. Wait for "Index complete" message (usually < 1 second)
+3. Type `/doctor` to verify environment health
+4. Type `/help` to see all commands
+5. Type `/analyze` to run a full analysis (security, complexity, churn, etc.)
+6. Press `Ctrl+B` to open the file tree panel
+7. Ask a natural language question: `What are the main entry points in this project?`
+8. Type `/act refactor the largest function into smaller helpers` to try AI-driven edits
+
+### Without the global command
+
+If you haven't run the setup script, you can run the binary directly:
+
+```bash
+# Windows
+.\rust-core\target\release\nala.exe -p C:\path\to\project
+
+# Linux / macOS
+./rust-core/target/release/nala -p /path/to/project
+```
 
 ---
 

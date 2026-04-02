@@ -166,8 +166,11 @@ const MAX_MESSAGES: usize = 1_000;
 impl App {
     pub fn new(project_root: &Path) -> Result<Self> {
         let (tx, rx) = mpsc::channel(64);
+        let canonical_root = project_root
+            .canonicalize()
+            .unwrap_or_else(|_| project_root.to_path_buf());
         Ok(Self {
-            project_root: project_root.to_path_buf(),
+            project_root: canonical_root,
             mode: AppMode::Booting,
             panels: PanelState::default(),
             input: String::new(),
@@ -175,7 +178,7 @@ impl App {
             history: Vec::new(),
             history_idx: None,
             messages: vec![Message::system(
-                "Welcome to Nala. Type a question or /help for commands.",
+                "Welcome to HiNala. Type a question or /help for commands.",
             )],
             status_text: "Initializing...".to_string(),
             index_progress: None,
@@ -595,7 +598,7 @@ impl App {
             let mut manager =
                 nala_lsp::LspManager::with_diagnostics_store(&root, diag_store);
             let server_name = manager.server().to_string();
-            if server_name == "None" {
+            if server_name == "none" {
                 let _ = tx
                     .send(BackgroundEvent::LspStartFailed(
                         "no supported language server found".into(),
@@ -606,6 +609,14 @@ impl App {
             if let Err(e) = manager.initialize().await {
                 let _ = tx
                     .send(BackgroundEvent::LspStartFailed(e.to_string()))
+                    .await;
+                return;
+            }
+            if !manager.is_initialized() {
+                let _ = tx
+                    .send(BackgroundEvent::LspStartFailed(
+                        format!("{} failed to initialize", server_name),
+                    ))
                     .await;
                 return;
             }
