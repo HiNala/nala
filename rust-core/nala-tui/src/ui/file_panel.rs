@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .title(Span::styled(" files ", Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD)))
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(theme::DARK_GRAY));
+        .border_style(Style::default().fg(theme::GRAY));
 
     let cached = get_or_build_tree(&app.project_root);
     let items: Vec<ListItem> = cached
@@ -72,7 +72,7 @@ fn build_tree_items(root: &Path) -> Vec<CachedItem> {
     if items.is_empty() {
         items.push(CachedItem {
             text: " (empty)".to_string(),
-            color: theme::DARK_GRAY,
+            color: theme::GRAY,
         });
     }
     items

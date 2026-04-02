@@ -100,7 +100,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                     Span::styled(
                         "  > ",
                         Style::default()
-                            .fg(theme::CYAN)
+                            .fg(theme::GREEN)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
@@ -122,26 +122,31 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 let mut assistant_lines = msg.text.lines();
                 if let Some(first_line) = assistant_lines.next() {
                     lines.push(Line::from(vec![
-                        Span::styled("  ai ", theme::bold_accent()),
-                        Span::styled(first_line, Style::default()),
+                        Span::styled(
+                            "  ai ",
+                            Style::default()
+                                .fg(theme::CYAN)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(first_line, Style::default().fg(theme::WHITE)),
                     ]));
                 }
                 for text_line in assistant_lines {
-                    lines.push(Line::from(vec![
-                        Span::styled("     ", Style::default().fg(theme::DARK_GRAY)),
-                        Span::styled(text_line, Style::default()),
-                    ]));
+                    lines.push(Line::from(Span::styled(
+                        format!("     {}", text_line),
+                        Style::default().fg(theme::WHITE),
+                    )));
                 }
             }
             MessageKind::System => {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", msg.text.lines().next().unwrap_or("")),
-                    Style::default().fg(theme::DARK_GRAY),
+                    Style::default().fg(theme::GRAY),
                 )));
                 for text_line in msg.text.lines().skip(1) {
                     lines.push(Line::from(Span::styled(
                         format!("  {}", text_line),
-                        Style::default().fg(theme::DARK_GRAY),
+                        Style::default().fg(theme::GRAY),
                     )));
                 }
             }
@@ -171,20 +176,27 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         let mut streaming_lines = streaming.lines();
         if let Some(first_line) = streaming_lines.next() {
             lines.push(Line::from(vec![
-                Span::styled("  ai ", theme::bold_accent()),
-                Span::styled(first_line, Style::default()),
+                Span::styled(
+                    "  ai ",
+                    Style::default()
+                        .fg(theme::CYAN)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(first_line, Style::default().fg(theme::WHITE)),
             ]));
         }
         for text_line in streaming_lines {
-            lines.push(Line::from(vec![
-                Span::styled("     ", Style::default().fg(theme::DARK_GRAY)),
-                Span::styled(text_line, Style::default()),
-            ]));
+            lines.push(Line::from(Span::styled(
+                format!("     {}", text_line),
+                Style::default().fg(theme::WHITE),
+            )));
         }
-        lines.push(Line::from(vec![
-            Span::styled("     ", Style::default().fg(theme::DARK_GRAY)),
-            Span::styled("_", theme::bold_accent().add_modifier(Modifier::SLOW_BLINK)),
-        ]));
+        lines.push(Line::from(Span::styled(
+            "     _",
+            Style::default()
+                .fg(theme::CYAN)
+                .add_modifier(Modifier::SLOW_BLINK),
+        )));
     }
 
     let total_lines = lines.len();
@@ -213,7 +225,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     if show_scroll_hint && offset > 0 {
         let hint = Line::from(Span::styled(
             format!("  ── {} more lines (PgUp to scroll) ──", offset),
-            Style::default().fg(theme::DARK_GRAY),
+            Style::default().fg(theme::GRAY),
         ));
         frame.render_widget(
             Paragraph::new(hint),

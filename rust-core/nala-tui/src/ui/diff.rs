@@ -55,7 +55,7 @@ fn render_preview(frame: &mut Frame, action: &PendingAction, area: Rect) {
     if total > MAX_PREVIEW_LINES {
         lines.push(Line::from(Span::styled(
             format!("  ... {} more lines", total - MAX_PREVIEW_LINES),
-            Style::default().fg(theme::DARK_GRAY),
+            Style::default().fg(theme::GRAY),
         )));
     }
 
@@ -66,16 +66,16 @@ fn render_hint(frame: &mut Frame, app: &App, area: Rect) {
     let remaining = app.pending_actions.len();
     let hint = Line::from(vec![
         Span::styled(" [y]", Style::default().fg(theme::GREEN).add_modifier(Modifier::BOLD)),
-        Span::styled(" apply  ", Style::default().fg(theme::GRAY)),
+        Span::styled(" apply  ", Style::default().fg(theme::WHITE)),
         Span::styled("[n]", Style::default().fg(theme::RED).add_modifier(Modifier::BOLD)),
-        Span::styled(" skip  ", Style::default().fg(theme::GRAY)),
+        Span::styled(" skip  ", Style::default().fg(theme::WHITE)),
         Span::styled("[a]", Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD)),
-        Span::styled(" all  ", Style::default().fg(theme::GRAY)),
-        Span::styled("[q]", Style::default().fg(theme::DARK_GRAY).add_modifier(Modifier::BOLD)),
-        Span::styled(" skip all  ", Style::default().fg(theme::GRAY)),
+        Span::styled(" all  ", Style::default().fg(theme::WHITE)),
+        Span::styled("[q]", Style::default().fg(theme::GRAY).add_modifier(Modifier::BOLD)),
+        Span::styled(" skip all  ", Style::default().fg(theme::WHITE)),
         Span::styled(
             format!("({} pending)", remaining),
-            Style::default().fg(theme::DARK_GRAY),
+            Style::default().fg(theme::GRAY),
         ),
     ]);
     frame.render_widget(Paragraph::new(hint), area);

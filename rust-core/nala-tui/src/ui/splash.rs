@@ -1,15 +1,14 @@
-//! Welcome screen — rendered as a bordered card when no messages are present.
+//! Welcome screen — clean vertical layout when no conversation exists.
 //!
-//! Inspired by Claude Code / Gemini CLI welcome experience:
-//! a clear, professional card showing identity, tips, and shortcuts.
+//! Renders a compact, readable welcome that works at any terminal width.
 
 use crate::app::App;
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
@@ -27,76 +26,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("project");
-    let version = env!("CARGO_PKG_VERSION");
     let branch = detect_git_branch(&app.project_root);
-
-    let border_style = Style::default().fg(theme::CYAN);
-
-    let card = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(Span::styled(
-            format!(" HiNala v{} ", version),
-            Style::default()
-                .fg(theme::CYAN)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .title_alignment(Alignment::Left)
-        .padding(Padding::new(1, 1, 0, 0));
-
-    let card_height = 16_u16.min(area.height);
-    let card_width = 72_u16.min(area.width);
-
-    let vert = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(card_height),
-            Constraint::Fill(1),
-        ])
-        .split(area);
-
-    let horiz = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(card_width),
-            Constraint::Fill(1),
-        ])
-        .split(vert[1]);
-
-    let card_area = horiz[1];
-    let inner = card.inner(card_area);
-    frame.render_widget(card, card_area);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Fill(1)])
-        .split(inner);
-
-    let top_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(34), Constraint::Fill(1)])
-        .split(rows[0]);
-
-    render_identity(frame, app, top_cols[0], project_name, branch.as_deref());
-    render_right_column(frame, top_cols[1]);
-
     let path_display = abbreviate_path(&app.project_root);
-    let path_line = Line::from(Span::styled(
-        format!(" {}", path_display),
-        Style::default().fg(theme::DARK_GRAY),
-    ));
-    frame.render_widget(Paragraph::new(path_line), rows[1]);
-}
 
-fn render_identity(
-    frame: &mut Frame,
-    app: &App,
-    area: Rect,
-    project_name: &str,
-    branch: Option<&str>,
-) {
     let logo_colors = [
         theme::CYAN,
         theme::CYAN,
@@ -105,28 +37,28 @@ fn render_identity(
         theme::MAGENTA,
     ];
 
-    let mut lines: Vec<Line> = LOGO
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            Line::from(Span::styled(
-                *line,
-                Style::default()
-                    .fg(logo_colors[i % logo_colors.len()])
-                    .add_modifier(Modifier::BOLD),
-            ))
-        })
-        .collect();
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(""));
+
+    for (i, logo_line) in LOGO.iter().enumerate() {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", logo_line),
+            Style::default()
+                .fg(logo_colors[i % logo_colors.len()])
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
 
     lines.push(Line::from(""));
 
     let mut info_spans = vec![Span::styled(
-        format!(" {}", project_name),
+        format!("  {}", project_name),
         Style::default()
             .fg(theme::WHITE)
             .add_modifier(Modifier::BOLD),
     )];
-    if let Some(b) = branch {
+    if let Some(b) = branch.as_deref() {
         info_spans.push(Span::styled(
             format!(" on {}", b),
             Style::default().fg(theme::GREEN),
@@ -136,79 +68,70 @@ fn render_identity(
 
     if !app.llm_provider.is_empty() {
         let provider_display = format_provider(&app.llm_provider);
-        let model_display = if app.llm_model.is_empty() {
+        let model_part = if app.llm_model.is_empty() {
             String::new()
         } else {
-            format!(" · {}", app.llm_model)
+            format!(" / {}", app.llm_model)
         };
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(" {}", provider_display),
-                Style::default().fg(theme::YELLOW),
-            ),
-            Span::styled(model_display, Style::default().fg(theme::DARK_GRAY)),
-        ]));
+        lines.push(Line::from(Span::styled(
+            format!("  {}{}", provider_display, model_part),
+            Style::default().fg(theme::YELLOW),
+        )));
     } else {
         lines.push(Line::from(Span::styled(
-            " Connecting...",
-            Style::default().fg(theme::DARK_GRAY),
+            "  Connecting...",
+            Style::default().fg(theme::GRAY),
         )));
     }
 
-    frame.render_widget(Paragraph::new(lines), area);
-}
+    lines.push(Line::from(Span::styled(
+        format!("  {}", path_display),
+        Style::default().fg(theme::GRAY),
+    )));
 
-fn render_right_column(frame: &mut Frame, area: Rect) {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "Getting started",
-            Style::default()
-                .fg(theme::GREEN)
-                .add_modifier(Modifier::BOLD),
-        )),
-        tip_line("1", "Ask questions or give instructions"),
-        tip_line("2", "/analyze to run code analysis"),
-        tip_line("3", "/help for all commands"),
-        tip_line("4", "/scope path/ to focus on a dir"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Keyboard shortcuts",
-            Style::default()
-                .fg(theme::GREEN)
-                .add_modifier(Modifier::BOLD),
-        )),
-        shortcut_line("^B", "toggle file panel"),
-        shortcut_line("^E", "toggle session panel"),
-        shortcut_line("Tab", "autocomplete commands"),
-        shortcut_line("^C", "quit"),
-    ];
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Getting started",
+        Style::default()
+            .fg(theme::GREEN)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(tip_line("  1. ", "Ask questions or give instructions"));
+    lines.push(tip_line("  2. ", "/analyze to run code analysis"));
+    lines.push(tip_line("  3. ", "/help for all commands"));
+    lines.push(tip_line("  4. ", "/scope path/ to focus on a dir"));
 
-    if area.height as usize > lines.len() {
-        lines.push(Line::from(""));
-    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Shortcuts",
+        Style::default()
+            .fg(theme::GREEN)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(shortcut_line("  Ctrl+B  ", "toggle file panel"));
+    lines.push(shortcut_line("  Ctrl+E  ", "toggle session panel"));
+    lines.push(shortcut_line("  Tab     ", "autocomplete commands"));
+    lines.push(shortcut_line("  Ctrl+C  ", "quit"));
 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn tip_line(num: &str, text: &str) -> Line<'static> {
+fn tip_line(prefix: &str, text: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled(
-            format!("{}. ", num),
-            Style::default().fg(theme::DARK_GRAY),
-        ),
-        Span::styled(text.to_string(), Style::default().fg(theme::GRAY)),
+        Span::styled(prefix.to_string(), Style::default().fg(theme::GRAY)),
+        Span::styled(text.to_string(), Style::default().fg(theme::WHITE)),
     ])
 }
 
 fn shortcut_line(key: &str, desc: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("{:<5}", key),
+            key.to_string(),
             Style::default()
                 .fg(theme::CYAN)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(desc.to_string(), Style::default().fg(theme::GRAY)),
+        Span::styled(desc.to_string(), Style::default().fg(theme::WHITE)),
     ])
 }
 

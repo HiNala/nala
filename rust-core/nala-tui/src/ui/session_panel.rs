@@ -15,18 +15,18 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .title(Span::styled(" sessions ", Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD)))
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(theme::DARK_GRAY));
+        .border_style(Style::default().fg(theme::GRAY));
 
     let sessions = load_sessions(&app.project_root);
     let items: Vec<ListItem> = if sessions.is_empty() {
         vec![
             ListItem::new(Line::from(Span::styled(
                 " no sessions yet",
-                Style::default().fg(theme::DARK_GRAY),
+                Style::default().fg(theme::GRAY),
             ))),
             ListItem::new(Line::from(Span::styled(
                 " run /analyze",
-                Style::default().fg(theme::DARK_GRAY),
+                Style::default().fg(theme::GRAY),
             ))),
         ]
     } else {

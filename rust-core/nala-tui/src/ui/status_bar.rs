@@ -1,6 +1,5 @@
 //! Status bar — single line at the very bottom.
 //! Shows: mode | stats or status | model info | shortcuts
-//! Inspired by Claude Code's bottom bar with mode + model display.
 
 use crate::app::{App, AppMode};
 use crate::ui::theme;
@@ -45,15 +44,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     if app.stats.total_files > 0 {
         left_spans.push(Span::styled(
             format!(
-                "· {} files · {} symbols",
+                " {} files  {} symbols",
                 app.stats.total_files, app.stats.total_functions
             ),
-            Style::default().fg(theme::DARK_GRAY),
+            Style::default().fg(theme::GRAY),
         ));
     } else {
         left_spans.push(Span::styled(
-            format!("· {}", app.status_text),
-            Style::default().fg(theme::DARK_GRAY),
+            format!(" {}", app.status_text),
+            Style::default().fg(theme::GRAY),
         ));
     }
 
@@ -66,7 +65,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             theme::RED
         };
         let bar = context_bar(app.context_utilization_pct);
-        left_spans.push(Span::styled(" · ctx ", Style::default().fg(theme::DARK_GRAY)));
+        left_spans.push(Span::styled("  ctx ", Style::default().fg(theme::GRAY)));
         left_spans.push(Span::styled(
             format!("{:.0}% ", app.context_utilization_pct),
             Style::default().fg(ctx_color).add_modifier(Modifier::BOLD),
@@ -81,7 +80,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                 short_tokens(app.context_total_tokens),
                 short_tokens(app.context_effective_limit)
             ),
-            Style::default().fg(theme::DARK_GRAY),
+            Style::default().fg(theme::GRAY),
         ));
     }
 
@@ -94,10 +93,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             app.llm_model.clone(),
             Style::default().fg(theme::GRAY),
         ));
-        right_spans.push(Span::styled(
-            "  · ",
-            Style::default().fg(theme::DARK_GRAY),
-        ));
+        right_spans.push(Span::styled("  ", Style::default()));
     }
 
     right_spans.push(Span::styled(

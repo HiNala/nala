@@ -1,7 +1,8 @@
 //! Terminal-native color theme for HiNala.
 //!
 //! Uses Color::Reset for backgrounds (respects user's terminal theme) and
-//! ANSI-compatible colors for accents. No custom RGB backgrounds.
+//! ANSI-compatible colors for accents. Avoids DarkGray for any text that
+//! must be readable — it renders as near-invisible on most dark terminals.
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -35,7 +36,7 @@ pub fn base() -> Style {
 }
 
 pub fn dim() -> Style {
-    Style::default().fg(DARK_GRAY)
+    Style::default().fg(GRAY)
 }
 
 pub fn muted() -> Style {

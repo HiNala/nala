@@ -22,7 +22,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let sep_char = "─".repeat(area.width as usize);
     let separator = Line::from(Span::styled(
         sep_char,
-        Style::default().fg(theme::DARK_GRAY),
+        Style::default().fg(theme::GRAY),
     ));
     frame.render_widget(Paragraph::new(separator), rows[0]);
 
@@ -39,12 +39,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 " > ",
                 Style::default()
-                    .fg(theme::CYAN)
+                    .fg(theme::GREEN)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "Type a question or /help for commands",
-                Style::default().fg(theme::DARK_GRAY),
+                Style::default().fg(theme::GRAY),
             ),
         ])
     } else {
@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 " > ",
                 Style::default()
-                    .fg(theme::CYAN)
+                    .fg(theme::GREEN)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(&app.input[..], input_style),
@@ -60,7 +60,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
         if let Some(hint) = app::tab_hint(&app.input) {
             let ghost = &hint[app.input.len()..];
-            spans.push(Span::styled(ghost, Style::default().fg(theme::DARK_GRAY)));
+            spans.push(Span::styled(ghost, Style::default().fg(theme::GRAY)));
         }
 
         Line::from(spans)
