@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
+    from nala_orchestrator.models.router import ModelRouter
 
 from .file_locks import FileLockRegistry
 from .messages import MessageBus
@@ -45,6 +46,7 @@ class WorkerAgent:
         task_list: SharedTaskList,
         locks: FileLockRegistry,
         bus: MessageBus,
+        model_override: tuple[str, str] | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.task = task
@@ -52,6 +54,7 @@ class WorkerAgent:
         self._task_list = task_list
         self._locks = locks
         self._bus = bus
+        self._model_override = model_override
 
     async def run(self) -> WorkerResult:
         """Execute the task and report back through the task list."""
@@ -95,7 +98,7 @@ class WorkerAgent:
         """Run the actual LLM call for this task."""
         from ..agents.orchestrator import AgentOrchestrator
 
-        agent = AgentOrchestrator(self.config)
+        agent = AgentOrchestrator(self.config, model_override=self._model_override)
 
         # Inject pending messages
         inbox = self._bus.format_for_agent(self.agent_id)
@@ -134,6 +137,7 @@ class AgentSpawner:
         locks: FileLockRegistry,
         bus: MessageBus,
         max_concurrent: int = 3,
+        model_router: ModelRouter | None = None,
     ) -> None:
         self._config = config
         self._task_list = task_list
@@ -141,11 +145,23 @@ class AgentSpawner:
         self._bus = bus
         self._max_concurrent = max_concurrent
         self._agent_counter = 0
+        self._router = model_router
+
+    def _resolve_model(self) -> tuple[str, str] | None:
+        """Use the router to pick a coding model for workers."""
+        if self._router is None:
+            return None
+        try:
+            from nala_orchestrator.models.types import TaskType
+            result = self._router.route(TaskType.CODE)
+            return (result.provider.value, result.model_id)
+        except Exception:
+            return None
 
     async def run_wave(self, tasks: list[Task]) -> list[WorkerResult]:
         """Run a list of tasks in parallel up to max_concurrent."""
         semaphore = asyncio.Semaphore(self._max_concurrent)
-        results: list[WorkerResult] = []
+        model_override = self._resolve_model()
 
         async def run_one(task: Task) -> WorkerResult:
             self._agent_counter += 1
@@ -157,9 +173,15 @@ class AgentSpawner:
                 task_list=self._task_list,
                 locks=self._locks,
                 bus=self._bus,
+                model_override=model_override,
             )
             async with semaphore:
-                log.info("Worker %s starting task: %s", agent_id, task.objective[:50])
+                log.info(
+                    "Worker %s starting task: %s (model: %s)",
+                    agent_id,
+                    task.objective[:50],
+                    f"{model_override[0]}/{model_override[1]}" if model_override else "default",
+                )
                 result = await worker.run()
                 log.info(
                     "Worker %s finished: %s (%s)",

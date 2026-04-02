@@ -150,7 +150,9 @@ Just type a question or instruction to chat with the AI. All slash commands:
 
 | Command | Description |
 |---------|-------------|
-| `/model` | Show or switch LLM provider/model |
+| `/model` | Show current LLM provider/model |
+| `/models` | Show all available models + routing table |
+| `/models refresh` | Re-probe provider API keys |
 | `/doctor` | Environment diagnostics |
 
 **General:**
@@ -282,6 +284,29 @@ Nala supports four providers. Set `LLM_PROVIDER` in `.env`:
 | `openai` | `OPENAI_API_KEY` | gpt-4o |
 | `google` | `GOOGLE_API_KEY` | gemini-2.0-flash |
 | `ollama` | *(none)* | codellama:13b |
+
+### Multi-Model Routing
+
+When multiple API keys are configured, Nala can route different task types to different models. Use `/models` to see the routing table and available models.
+
+Per-task overrides in `.env`:
+
+```bash
+ROUTE_PLAN=anthropic:claude-opus-4-6      # planning uses flagship
+ROUTE_CODE=openai:gpt-4o                  # coding uses GPT-4o
+ROUTE_EXPLORE=openai:gpt-4o-mini          # exploration uses cheaper model
+ROUTE_SUMMARIZE=google:gemini-2.0-flash   # summaries use fast/cheap
+```
+
+| Task Type | Description | Default Tier |
+|-----------|-------------|--------------|
+| `plan` | Architecture, PRDs, mission writing | Flagship |
+| `code` | Implementation, edits, bug fixes | Mid-tier |
+| `explore` | Read-only analysis, triage | Cheap/fast |
+| `research` | Documentation gathering | Flagship |
+| `design` | UI/UX reasoning | Multimodal |
+| `review` | Code review, safety audit | Mid-tier |
+| `summarize` | Compaction, handoffs | Cheap/fast |
 
 ---
 

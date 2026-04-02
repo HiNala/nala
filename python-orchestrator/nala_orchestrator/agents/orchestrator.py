@@ -29,7 +29,7 @@ from ..context.compactor import Compactor
 from ..context.config import CompactionConfig
 from ..context.counter import TokenCounter, TokenUsage
 from ..context.detector import OpportunityDetector
-from ..llm.provider import LLMMessage, create_provider
+from ..llm.provider import LLMMessage, create_provider, create_provider_for
 from .action_extractor import extract_actions
 
 logger = logging.getLogger(__name__)
@@ -153,8 +153,13 @@ class ConversationContext:
 class AgentOrchestrator:
     """Routes user queries to the LLM with codebase context."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self,
+        config: Config,
+        model_override: tuple[str, str] | None = None,
+    ) -> None:
         self.config = config
+        self._model_override = model_override
         self.context = ConversationContext(
             project_root=str(config.project_root),
         )
@@ -261,7 +266,11 @@ class AgentOrchestrator:
 
     def _get_provider(self):
         if self._provider is None:
-            self._provider = create_provider(self.config)
+            if self._model_override:
+                prov_name, model_id = self._model_override
+                self._provider = create_provider_for(prov_name, model_id, self.config)
+            else:
+                self._provider = create_provider(self.config)
         return self._provider
 
     def build_system_prompt(self, query: str = "") -> str:

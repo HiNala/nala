@@ -169,12 +169,12 @@ Update `python-orchestrator/nala_orchestrator/agent_runtime/manager.py` and `mul
 
 ## Acceptance Criteria
 
-- [ ] `/models` shows all available providers, valid keys, and accessible models
-- [ ] The registry is persisted and only rebuilt on explicit refresh
-- [ ] The router can select different models for planning, coding, exploring, research, design, and review tasks
-- [ ] Workers can use a different model than the orchestrator
-- [ ] Missing API keys produce helpful suggestions, not silent failures
-- [ ] The system works with only one provider configured (graceful single-provider fallback)
+- [x] `/models` shows all available providers, valid keys, and accessible models
+- [x] The registry is persisted and only rebuilt on explicit refresh
+- [x] The router can select different models for planning, coding, exploring, research, design, and review tasks
+- [x] Workers can use a different model than the orchestrator
+- [x] Missing API keys produce helpful suggestions, not silent failures
+- [x] The system works with only one provider configured (graceful single-provider fallback)
 
 ## Estimated Complexity
 
