@@ -49,6 +49,8 @@ pub struct IndexResult {
     pub index_duration: Duration,
     /// All extracted symbols (empty when nothing changed).
     pub symbols: Vec<Symbol>,
+    /// Per-file metrics (complexity, line counts).
+    pub file_metrics: Vec<metrics::FileMetrics>,
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -101,8 +103,6 @@ pub fn index_project(root: &Path) -> Result<IndexResult> {
     let scan_result = scan_project(root)?;
 
     let files_to_parse = if scan_result.changed_files.is_empty() {
-        // If users run `scan` then `index`, hashes are already up-to-date.
-        // Fall back to indexing all discovered files so index is never a no-op.
         scan_result.all_files.clone()
     } else {
         scan_result.changed_files.clone()
@@ -110,9 +110,43 @@ pub fn index_project(root: &Path) -> Result<IndexResult> {
 
     let symbols = parser::parse_files_parallel(&files_to_parse, root)?;
 
-    let function_count = symbols.iter().filter(|s| s.kind == symbol_graph::SymbolKind::Function).count();
-    let class_count = symbols.iter().filter(|s| s.kind == symbol_graph::SymbolKind::Class).count();
-    let import_count = symbols.iter().filter(|s| s.kind == symbol_graph::SymbolKind::Import).count();
+    // Compute per-file metrics in parallel
+    let file_metrics: Vec<metrics::FileMetrics> = files_to_parse
+        .iter()
+        .filter_map(|hf| {
+            let lang = parser::detect_language(&hf.extension)?;
+            let source = std::fs::read_to_string(&hf.absolute_path).ok()?;
+            Some(metrics::compute_file_metrics(&source, &hf.relative_path, lang))
+        })
+        .collect();
+
+    // Update cache with symbol metadata per file
+    if let Ok(mut cache) = Cache::open(root) {
+        let mut symbol_counts: std::collections::HashMap<&str, (usize, &str)> =
+            std::collections::HashMap::new();
+        for sym in &symbols {
+            let entry = symbol_counts
+                .entry(sym.file_path.as_str())
+                .or_insert((0, &sym.language));
+            entry.0 += 1;
+        }
+        for (path, (count, lang)) in &symbol_counts {
+            let _ = cache.update_symbol_metadata(path, lang, *count);
+        }
+    }
+
+    let function_count = symbols
+        .iter()
+        .filter(|s| s.kind == symbol_graph::SymbolKind::Function)
+        .count();
+    let class_count = symbols
+        .iter()
+        .filter(|s| s.kind == symbol_graph::SymbolKind::Class)
+        .count();
+    let import_count = symbols
+        .iter()
+        .filter(|s| s.kind == symbol_graph::SymbolKind::Import)
+        .count();
     let total_symbols = symbols.len();
     let indexed_files = files_to_parse.len();
 
@@ -125,5 +159,6 @@ pub fn index_project(root: &Path) -> Result<IndexResult> {
         import_count,
         index_duration: start.elapsed(),
         symbols,
+        file_metrics,
     })
 }

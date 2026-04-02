@@ -3,11 +3,12 @@
 //! Manages the lifecycle of a language server process for a project and
 //! provides async methods for the most common LSP operations:
 //!
-//!   - `initialize()`         — start the server and run the init handshake
-//!   - `go_to_definition()`   — textDocument/definition
-//!   - `find_references()`    — textDocument/references
-//!   - `hover()`              — textDocument/hover
-//!   - `shutdown()`           — graceful server shutdown
+//!   - `initialize()`         -- start the server and run the init handshake
+//!   - `did_open()`           -- notify the server a document is open
+//!   - `go_to_definition()`   -- textDocument/definition
+//!   - `find_references()`    -- textDocument/references
+//!   - `hover()`              -- textDocument/hover
+//!   - `shutdown()`           -- graceful server shutdown
 //!
 //! If no suitable language server is installed, all methods return `Ok(None)`
 //! or `Ok(vec![])` without crashing. Nala degrades gracefully.
@@ -17,94 +18,88 @@ use crate::diagnostics::DiagnosticsStore;
 use crate::transport::{LspTransport, NotificationCallback};
 use anyhow::Result;
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use url::Url;
 
-// ── Public return types ───────────────────────────────────────────────────────
-
-/// Result of a go-to-definition query.
 #[derive(Debug, Clone)]
 pub struct DefinitionLocation {
-    pub file_path:  PathBuf,
+    pub file_path: PathBuf,
     pub start_line: usize,
-    pub start_col:  usize,
+    pub start_col: usize,
 }
 
-/// A reference found by find-references.
 #[derive(Debug, Clone)]
 pub struct Reference {
     pub file_path: PathBuf,
-    pub line:      usize,
-    pub col:       usize,
+    pub line: usize,
+    pub col: usize,
 }
 
-/// Hover information for a symbol.
 #[derive(Debug, Clone)]
 pub struct HoverInfo {
     pub contents: String,
 }
 
-// ── LspManager ────────────────────────────────────────────────────────────────
-
-/// Manages one LSP server connection for a project.
-pub struct LspManager {
-    project_root: PathBuf,
-    server:       LspServer,
-    transport:    Option<LspTransport>,
-    initialized:  bool,
-    diagnostics:  DiagnosticsStore,
+/// Shared handle to a persistent LSP connection. Cheap to clone.
+#[derive(Clone)]
+pub struct LspHandle {
+    inner: Arc<Mutex<LspManagerInner>>,
 }
 
-impl LspManager {
-    /// Create a new manager for the given project root.
-    /// Auto-detects the appropriate language server.
-    pub fn new(project_root: &Path) -> Self {
-        Self::with_diagnostics_store(project_root, DiagnosticsStore::new())
-    }
+struct LspManagerInner {
+    project_root: PathBuf,
+    server: LspServer,
+    transport: Option<LspTransport>,
+    initialized: bool,
+    opened_files: HashSet<PathBuf>,
+    diagnostics: DiagnosticsStore,
+}
 
-    /// Create a manager sharing an external diagnostics store (for TUI integration).
-    pub fn with_diagnostics_store(project_root: &Path, diagnostics: DiagnosticsStore) -> Self {
+impl LspHandle {
+    pub fn new(project_root: &Path, diagnostics: DiagnosticsStore) -> Self {
         let server = detect_server(project_root);
         tracing::debug!("LSP server detected: {}", server);
         Self {
-            project_root: project_root.to_path_buf(),
-            server,
-            transport: None,
-            initialized: false,
-            diagnostics,
+            inner: Arc::new(Mutex::new(LspManagerInner {
+                project_root: project_root.to_path_buf(),
+                server,
+                transport: None,
+                initialized: false,
+                opened_files: HashSet::new(),
+                diagnostics,
+            })),
         }
     }
 
-    /// Whether the server has completed the initialize handshake.
-    pub fn is_initialized(&self) -> bool {
-        self.initialized
+    pub async fn server_name(&self) -> String {
+        self.inner.lock().await.server.to_string()
     }
 
-    /// Access the live diagnostics store (updated by the LSP server in the background).
-    pub fn diagnostics(&self) -> &DiagnosticsStore {
-        &self.diagnostics
+    pub async fn is_initialized(&self) -> bool {
+        self.inner.lock().await.initialized
     }
 
-    /// Return the detected language server type.
-    pub fn server(&self) -> &LspServer {
-        &self.server
+    pub async fn diagnostics(&self) -> DiagnosticsStore {
+        self.inner.lock().await.diagnostics.clone()
     }
 
-    /// Start the LSP server process and perform the initialize handshake.
-    pub async fn initialize(&mut self) -> Result<()> {
-        if self.server == LspServer::None {
+    pub async fn initialize(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        if inner.server == LspServer::None {
             tracing::debug!("No LSP server available for this project");
             return Ok(());
         }
-        if self.initialized {
+        if inner.initialized {
             return Ok(());
         }
 
-        let (cmd, args) = self.server.command_and_args();
+        let (cmd, args) = inner.server.command_and_args();
         tracing::info!("Starting LSP server: {} {:?}", cmd, args);
 
-        let diag_store = self.diagnostics.clone();
+        let diag_store = inner.diagnostics.clone();
         let on_notification: NotificationCallback = Arc::new(move |method, params| {
             if method == "textDocument/publishDiagnostics" {
                 diag_store.handle_publish_diagnostics(&params);
@@ -115,7 +110,7 @@ impl LspManager {
         let transport = match LspTransport::spawn_with_notifications(
             &cmd,
             &arg_refs,
-            &self.project_root,
+            &inner.project_root,
             Some(on_notification),
         )
         .await
@@ -130,7 +125,7 @@ impl LspManager {
             }
         };
 
-        let root_uri = path_to_uri(&self.project_root);
+        let root_uri = path_to_uri(&inner.project_root);
         let init_result = transport
             .request(
                 "initialize",
@@ -139,6 +134,10 @@ impl LspManager {
                     "rootUri": root_uri,
                     "capabilities": {
                         "textDocument": {
+                            "synchronization": {
+                                "openClose": true,
+                                "change": 1,
+                            },
                             "definition":  { "dynamicRegistration": false },
                             "references":  { "dynamicRegistration": false },
                             "hover": {
@@ -161,9 +160,9 @@ impl LspManager {
         match init_result {
             Ok(_) => {
                 transport.notify("initialized", json!({})).await?;
-                self.transport = Some(transport);
-                self.initialized = true;
-                tracing::info!("LSP server initialized: {}", self.server);
+                inner.transport = Some(transport);
+                inner.initialized = true;
+                tracing::info!("LSP server initialized: {}", inner.server);
             }
             Err(e) => {
                 tracing::warn!("LSP initialize handshake failed: {e}");
@@ -173,29 +172,66 @@ impl LspManager {
         Ok(())
     }
 
-    /// Find the definition of the symbol at the given file/line/col.
+    async fn ensure_file_open(&self, file: &Path) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+
+        if inner.opened_files.contains(&canonical) {
+            return Ok(());
+        }
+
+        if let Some(ref transport) = inner.transport {
+            let text = tokio::fs::read_to_string(&canonical)
+                .await
+                .unwrap_or_default();
+            let lang_id = detect_language_id(&canonical);
+            transport
+                .notify(
+                    "textDocument/didOpen",
+                    json!({
+                        "textDocument": {
+                            "uri": path_to_uri(&canonical),
+                            "languageId": lang_id,
+                            "version": 1,
+                            "text": text,
+                        }
+                    }),
+                )
+                .await?;
+            inner.opened_files.insert(canonical);
+        }
+
+        Ok(())
+    }
+
     pub async fn go_to_definition(
         &self,
         file: &Path,
         line: usize,
         col: usize,
     ) -> Result<Option<DefinitionLocation>> {
-        let transport = match &self.transport {
+        self.ensure_file_open(file).await?;
+        let inner = self.inner.lock().await;
+        let transport = match &inner.transport {
             Some(t) => t,
             None => return Ok(None),
         };
 
-        let resp = transport.request(
-            "textDocument/definition",
-            json!({
-                "textDocument": { "uri": path_to_uri(file) },
-                "position": { "line": line, "character": col },
-            }),
-        ).await?;
+        let resp = transport
+            .request(
+                "textDocument/definition",
+                json!({
+                    "textDocument": { "uri": path_to_uri(file) },
+                    "position": { "line": line, "character": col },
+                }),
+            )
+            .await?;
 
-        // Response is Location | Location[] | LocationLink[] | null
         let loc = if resp["result"].is_array() {
-            resp["result"].as_array().and_then(|arr| arr.first()).cloned()
+            resp["result"]
+                .as_array()
+                .and_then(|arr| arr.first())
+                .cloned()
         } else if resp["result"].is_object() {
             Some(resp["result"].clone())
         } else {
@@ -209,34 +245,41 @@ impl LspManager {
             ) {
                 let file_path = uri_to_path(uri);
                 let start_line = range["start"]["line"].as_u64().unwrap_or(0) as usize;
-                let start_col  = range["start"]["character"].as_u64().unwrap_or(0) as usize;
-                return Ok(Some(DefinitionLocation { file_path, start_line, start_col }));
+                let start_col = range["start"]["character"].as_u64().unwrap_or(0) as usize;
+                return Ok(Some(DefinitionLocation {
+                    file_path,
+                    start_line,
+                    start_col,
+                }));
             }
         }
 
         Ok(None)
     }
 
-    /// Find all references to the symbol at the given file/line/col.
     pub async fn find_references(
         &self,
         file: &Path,
         line: usize,
         col: usize,
     ) -> Result<Vec<Reference>> {
-        let transport = match &self.transport {
+        self.ensure_file_open(file).await?;
+        let inner = self.inner.lock().await;
+        let transport = match &inner.transport {
             Some(t) => t,
             None => return Ok(vec![]),
         };
 
-        let resp = transport.request(
-            "textDocument/references",
-            json!({
-                "textDocument": { "uri": path_to_uri(file) },
-                "position": { "line": line, "character": col },
-                "context": { "includeDeclaration": true },
-            }),
-        ).await?;
+        let resp = transport
+            .request(
+                "textDocument/references",
+                json!({
+                    "textDocument": { "uri": path_to_uri(file) },
+                    "position": { "line": line, "character": col },
+                    "context": { "includeDeclaration": true },
+                }),
+            )
+            .await?;
 
         let mut refs = Vec::new();
         if let Some(arr) = resp["result"].as_array() {
@@ -245,7 +288,7 @@ impl LspManager {
                     refs.push(Reference {
                         file_path: uri_to_path(uri),
                         line: range["start"]["line"].as_u64().unwrap_or(0) as usize,
-                        col:  range["start"]["character"].as_u64().unwrap_or(0) as usize,
+                        col: range["start"]["character"].as_u64().unwrap_or(0) as usize,
                     });
                 }
             }
@@ -254,31 +297,32 @@ impl LspManager {
         Ok(refs)
     }
 
-    /// Get hover documentation for the symbol at the given file/line/col.
     pub async fn hover(
         &self,
         file: &Path,
         line: usize,
         col: usize,
     ) -> Result<Option<HoverInfo>> {
-        let transport = match &self.transport {
+        self.ensure_file_open(file).await?;
+        let inner = self.inner.lock().await;
+        let transport = match &inner.transport {
             Some(t) => t,
             None => return Ok(None),
         };
 
-        let resp = transport.request(
-            "textDocument/hover",
-            json!({
-                "textDocument": { "uri": path_to_uri(file) },
-                "position": { "line": line, "character": col },
-            }),
-        ).await?;
+        let resp = transport
+            .request(
+                "textDocument/hover",
+                json!({
+                    "textDocument": { "uri": path_to_uri(file) },
+                    "position": { "line": line, "character": col },
+                }),
+            )
+            .await?;
 
         let contents = match resp["result"].get("contents") {
             Some(c) if c.is_string() => c.as_str().unwrap_or("").to_string(),
-            Some(c) if c.is_object() => {
-                c["value"].as_str().unwrap_or("").to_string()
-            }
+            Some(c) if c.is_object() => c["value"].as_str().unwrap_or("").to_string(),
             Some(c) if c.is_array() => {
                 let empty = Vec::new();
                 c.as_array()
@@ -304,23 +348,44 @@ impl LspManager {
         }
     }
 
-    /// Shut down the LSP server gracefully.
     pub async fn shutdown(&self) -> Result<()> {
-        if let Some(transport) = &self.transport {
-            let _ = transport.request("shutdown", serde_json::Value::Null).await;
-            let _ = transport.notify("exit", serde_json::Value::Null).await;
-            tracing::info!("LSP server shut down: {}", self.server);
+        let inner = self.inner.lock().await;
+        if let Some(transport) = &inner.transport {
+            let _ = transport
+                .request("shutdown", serde_json::Value::Null)
+                .await;
+            let _ = transport
+                .notify("exit", serde_json::Value::Null)
+                .await;
+            tracing::info!("LSP server shut down: {}", inner.server);
         }
         Ok(())
     }
 }
 
-// ── URI helpers ───────────────────────────────────────────────────────────────
+fn detect_language_id(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("rs") => "rust",
+        Some("py") => "python",
+        Some("js") => "javascript",
+        Some("jsx") => "javascriptreact",
+        Some("ts") => "typescript",
+        Some("tsx") => "typescriptreact",
+        Some("go") => "go",
+        Some("c") | Some("h") => "c",
+        Some("cpp") | Some("hpp") | Some("cc") => "cpp",
+        Some("java") => "java",
+        Some("rb") => "ruby",
+        Some("toml") => "toml",
+        Some("json") => "json",
+        Some("yaml") | Some("yml") => "yaml",
+        Some("md") => "markdown",
+        _ => "plaintext",
+    }
+}
 
 fn path_to_uri(path: &Path) -> String {
-    // Best-effort: canonicalize if possible, then convert.
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    // On Windows, Url::from_file_path handles drive letters correctly.
     Url::from_file_path(&canonical)
         .map(|u| u.to_string())
         .unwrap_or_else(|_| format!("file:///{}", canonical.display()))
@@ -331,7 +396,6 @@ pub(crate) fn uri_to_path(uri: &str) -> PathBuf {
         .ok()
         .and_then(|u| u.to_file_path().ok())
         .unwrap_or_else(|| {
-            // Fallback: strip "file://" prefix.
             let stripped = uri.strip_prefix("file://").unwrap_or(uri);
             PathBuf::from(stripped)
         })

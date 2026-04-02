@@ -86,6 +86,12 @@ pub enum BridgeRequest {
     HandoffShow,
     /// Show handoff chain history.
     HandoffHistory,
+    /// Request memory summary.
+    MemorySummary,
+    /// List memory sessions.
+    MemorySessions,
+    /// Forget (clear) memory entries.
+    MemoryForget { target: String },
     /// Update orchestrator-side index context.
     IndexContext {
         total_files: usize,
@@ -260,6 +266,30 @@ impl PythonBridge {
     pub async fn handoff_history(&self) -> Result<()> {
         self.request_tx
             .send(BridgeRequest::HandoffHistory)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Request memory summary.
+    pub async fn memory_summary(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::MemorySummary)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// List memory sessions.
+    pub async fn memory_sessions(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::MemorySessions)
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Forget (clear) memory entries.
+    pub async fn memory_forget(&self, target: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::MemoryForget { target })
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -490,6 +520,19 @@ async fn bridge_task(
                             BridgeRequest::HandoffHistory => json!({
                                 "id": id,
                                 "type": "handoff_history",
+                            }),
+                            BridgeRequest::MemorySummary => json!({
+                                "id": id,
+                                "type": "memory_summary",
+                            }),
+                            BridgeRequest::MemorySessions => json!({
+                                "id": id,
+                                "type": "memory_sessions",
+                            }),
+                            BridgeRequest::MemoryForget { target } => json!({
+                                "id": id,
+                                "type": "memory_forget",
+                                "target": target,
                             }),
                             BridgeRequest::IndexContext {
                                 total_files,

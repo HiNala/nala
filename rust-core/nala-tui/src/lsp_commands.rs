@@ -1,22 +1,28 @@
 //! LSP-related command handlers.
 //!
-//! Extracted from `app.rs` so LSP lookups and status queries live in
-//! their own focused module.
+//! Uses the persistent LspHandle stored on App instead of creating
+//! throwaway LSP clients per command. Sends didOpen for queried files
+//! automatically so servers can provide accurate results.
 
-use crate::app::{App, BackgroundEvent, Message};
+use crate::app::{App, AppMode, BackgroundEvent, Message};
 use std::path::{Path, PathBuf};
 
 impl App {
     pub(crate) fn lsp_status(&mut self) {
-        let root = self.project_root.clone();
         let initialized = self.lsp_initialized;
         let errors = self.diagnostics_store.error_count();
         let warnings = self.diagnostics_store.warning_count();
 
+        let Some(handle) = self.lsp_handle.clone() else {
+            self.push_message(Message::system(
+                "LSP: not started (run /scan first)".to_string(),
+            ));
+            return;
+        };
+
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
-            let manager = nala_lsp::LspManager::new(&root);
-            let server = manager.server().to_string();
+            let server = handle.server_name().await;
             let status = if initialized { "running" } else { "not started" };
             let msg = format!(
                 "LSP: {} ({})\n  Errors: {} | Warnings: {}",
@@ -48,30 +54,36 @@ impl App {
             return;
         };
 
-        let root = self.project_root.clone();
+        let Some(handle) = self.lsp_handle.clone() else {
+            self.push_message(Message::error(
+                "LSP not available. Run /index first to start the language server.".to_string(),
+            ));
+            return;
+        };
+
+        if !self.lsp_initialized {
+            self.push_message(Message::error(
+                "LSP is still initializing. Try again in a moment.".to_string(),
+            ));
+            return;
+        }
+
         let tx = self.bg_tx.clone();
         let mode = mode.to_string();
+        self.mode = AppMode::Analyzing;
         tokio::spawn(async move {
-            let mut manager = nala_lsp::LspManager::new(&root);
-            if let Err(e) = manager.initialize().await {
-                let _ = tx
-                    .send(BackgroundEvent::AssistantError(e.to_string()))
-                    .await;
-                return;
-            }
-
             let output = match mode.as_str() {
-                "def" => match manager.go_to_definition(&file, line, col).await {
+                "def" => match handle.go_to_definition(&file, line, col).await {
                     Ok(Some(def)) => format!(
                         "Definition: {}:{}:{}",
                         def.file_path.display(),
-                        def.start_line,
-                        def.start_col
+                        def.start_line + 1,
+                        def.start_col + 1
                     ),
                     Ok(None) => "No definition found.".to_string(),
                     Err(e) => format!("LSP definition error: {}", e),
                 },
-                "refs" => match manager.find_references(&file, line, col).await {
+                "refs" => match handle.find_references(&file, line, col).await {
                     Ok(refs) if refs.is_empty() => "No references found.".to_string(),
                     Ok(refs) => {
                         let mut lines = vec![format!("Found {} references:", refs.len())];
@@ -79,15 +91,15 @@ impl App {
                             lines.push(format!(
                                 "  - {}:{}:{}",
                                 r.file_path.display(),
-                                r.line,
-                                r.col
+                                r.line + 1,
+                                r.col + 1
                             ));
                         }
                         lines.join("\n")
                     }
                     Err(e) => format!("LSP references error: {}", e),
                 },
-                "hover" => match manager.hover(&file, line, col).await {
+                "hover" => match handle.hover(&file, line, col).await {
                     Ok(Some(h)) => format!("Hover:\n{}", h.contents),
                     Ok(None) => "No hover information found.".to_string(),
                     Err(e) => format!("LSP hover error: {}", e),
@@ -95,14 +107,12 @@ impl App {
                 _ => "Unsupported LSP mode.".to_string(),
             };
 
-            let _ = manager.shutdown().await;
             let _ = tx.send(BackgroundEvent::AssistantChunk(output)).await;
             let _ = tx.send(BackgroundEvent::AssistantDone).await;
         });
     }
 }
 
-/// Parse a `file:line:col` location spec into (absolute path, 0-based line, 0-based col).
 fn parse_location_spec(project_root: &Path, spec: &str) -> Option<(PathBuf, usize, usize)> {
     let raw = spec.trim();
     if raw.is_empty() {

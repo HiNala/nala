@@ -14,12 +14,16 @@ impl App {
                 self.should_quit = true;
             }
             "/scan" => {
-                self.push_message(Message::system("Scanning project..."));
+                self.push_message(Message::system(
+                    "Scanning project files (hash-only, no parsing)..."
+                ));
                 self.index_progress = Some(0.2);
-                self.start_background_index();
+                self.start_background_scan();
             }
             "/index" => {
-                self.push_message(Message::system("Indexing project..."));
+                self.push_message(Message::system(
+                    "Indexing project (parse + symbols + metrics)..."
+                ));
                 self.index_progress = Some(0.2);
                 self.start_background_index();
             }
@@ -50,6 +54,10 @@ impl App {
             "/hover" => {
                 let spec = parts.get(1).copied().unwrap_or("").trim().to_string();
                 self.lsp_hover(spec);
+            }
+            "/memory" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.handle_memory_command(args);
             }
             "/doctor" => self.doctor(),
             "/session" => {
@@ -137,6 +145,9 @@ impl App {
             "  /session summary       — show current session summary\n",
             "  /generate              — generate a mission doc from findings\n",
             "  /generate <focus>      — generate focused on a topic\n",
+            "  /memory                — show memory summary\n",
+            "  /memory sessions       — list remembered sessions\n",
+            "  /memory forget <target> — forget specific memory entries\n",
             "  /context               — show context window usage breakdown\n",
             "  /compact               — compact context window to free tokens\n",
             "  /compact <focus>       — compact while preserving focus topic\n",
@@ -601,6 +612,53 @@ impl App {
                     .await;
             }
         });
+    }
+
+    fn handle_memory_command(&mut self, args: &str) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        let sub: Vec<&str> = args.splitn(2, ' ').collect();
+        match sub[0] {
+            "" => {
+                self.push_message(Message::system("Fetching memory summary..."));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.memory_summary().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+            "sessions" => {
+                self.push_message(Message::system("Listing memory sessions..."));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.memory_sessions().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+            "forget" => {
+                let target = sub.get(1).copied().unwrap_or("").trim().to_string();
+                if target.is_empty() {
+                    self.push_message(Message::error(
+                        "Usage: /memory forget <all|session_id>",
+                    ));
+                    return;
+                }
+                self.push_message(Message::system(format!("Forgetting: {}...", target)));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.memory_forget(target).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+            _ => {
+                self.push_message(Message::error(
+                    "Usage: /memory | /memory sessions | /memory forget <target>",
+                ));
+            }
+        }
     }
 
     fn handoff_history(&mut self) {

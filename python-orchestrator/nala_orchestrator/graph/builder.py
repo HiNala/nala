@@ -71,6 +71,7 @@ class GraphBuilder:
         functions:  list[dict] = []
         classes:    list[dict] = []
         imports:    list[dict] = []
+        calls:      list[dict] = []
         file_paths: set[str] = set()
 
         for sym in symbols:
@@ -82,16 +83,19 @@ class GraphBuilder:
                 classes.append(sym)
             elif kind == "import":
                 imports.append(sym)
+            elif kind == "call":
+                calls.append(sym)
 
         total = 0
         total += self._upsert_files(list(file_paths))
         total += self._upsert_functions(functions)
         total += self._upsert_classes(classes)
         total += self._upsert_imports(imports)
+        total += self._upsert_calls(calls)
 
         logger.info(
-            "Graph builder: %d files, %d functions, %d classes, %d imports",
-            len(file_paths), len(functions), len(classes), len(imports),
+            "Graph builder: %d files, %d functions, %d classes, %d imports, %d calls",
+            len(file_paths), len(functions), len(classes), len(imports), len(calls),
         )
         return total
 
@@ -182,6 +186,42 @@ class GraphBuilder:
                 WITH c, row
                 MATCH (f:File {path: row.file_path})
                 MERGE (f)-[:CONTAINS]->(c)
+                """,
+                rows=batch,
+            )
+        return len(symbols)
+
+    def _upsert_calls(self, symbols: list[dict]) -> int:
+        """Batch upsert CALLS relationships between functions.
+
+        Each call symbol has a name (the callee) and exists inside a file at a
+        line. We match the caller function as the one in the same file whose
+        line range encloses the call site, then create a CALLS edge to any
+        function node with the same name.
+        """
+        for i in range(0, len(symbols), _BATCH_SIZE):
+            batch = [
+                {
+                    "file_path":  s["file_path"],
+                    "callee":     s["name"],
+                    "call_line":  s.get("start_line", 0),
+                }
+                for s in symbols[i:i + _BATCH_SIZE]
+            ]
+            self.conn.run_write(
+                """
+                UNWIND $rows AS row
+                OPTIONAL MATCH (caller:Function)
+                WHERE caller.file_path = row.file_path
+                  AND caller.start_line <= row.call_line
+                  AND caller.end_line >= row.call_line
+                WITH caller, row
+                WHERE caller IS NOT NULL
+                OPTIONAL MATCH (callee:Function)
+                WHERE callee.name = row.callee
+                WITH caller, callee, row
+                WHERE callee IS NOT NULL
+                MERGE (caller)-[:CALLS {line: row.call_line}]->(callee)
                 """,
                 rows=batch,
             )

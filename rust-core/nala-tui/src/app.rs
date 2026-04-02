@@ -97,6 +97,13 @@ impl Message {
 
 #[derive(Debug)]
 pub enum BackgroundEvent {
+    ScanComplete {
+        total_files: usize,
+        changed_files: usize,
+        new_files: usize,
+        deleted_count: usize,
+        duration_ms: u128,
+    },
     IndexComplete {
         indexed_files: usize,
         total_files: usize,
@@ -157,6 +164,7 @@ pub struct App {
     pub apply_all: bool,
     pub analysis_scope: Option<String>,
     pub lsp_initialized: bool,
+    pub lsp_handle: Option<nala_lsp::LspHandle>,
     pub diagnostics_store: DiagnosticsStore,
     pub scroll_offset: usize,
     pub tab_index: Option<usize>,
@@ -202,6 +210,7 @@ impl App {
             apply_all: false,
             analysis_scope: None,
             lsp_initialized: false,
+            lsp_handle: None,
             diagnostics_store: DiagnosticsStore::new(),
             scroll_offset: 0,
             tab_index: None,
@@ -440,6 +449,39 @@ impl App {
 
     // ── Background tasks ───────────────────────────────────────────────────
 
+    pub(crate) fn start_background_scan(&self) {
+        let root = self.project_root.clone();
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                nala_indexer::scan_project(&root)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(scan)) => {
+                    let _ = tx
+                        .send(BackgroundEvent::ScanComplete {
+                            total_files: scan.total_files,
+                            changed_files: scan.changed_files.len(),
+                            new_files: scan.new_files.len(),
+                            deleted_count: scan.deleted_count,
+                            duration_ms: scan.scan_duration.as_millis(),
+                        })
+                        .await;
+                }
+                Ok(Err(e)) => {
+                    let _ = tx.send(BackgroundEvent::IndexError(e.to_string())).await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(BackgroundEvent::IndexError(format!("Scan task panicked: {}", e)))
+                        .await;
+                }
+            }
+        });
+    }
+
     pub(crate) fn start_background_index(&self) {
         let root = self.project_root.clone();
         let tx = self.bg_tx.clone();
@@ -474,6 +516,24 @@ impl App {
 
     fn handle_background_event(&mut self, event: BackgroundEvent) {
         match event {
+            BackgroundEvent::ScanComplete {
+                total_files,
+                changed_files,
+                new_files,
+                deleted_count,
+                duration_ms,
+            } => {
+                self.index_progress = None;
+                crate::ui::file_panel::invalidate_cache();
+                self.stats.total_files = total_files;
+                self.push_message(Message::system(format!(
+                    "Scan complete in {}ms: {} files ({} changed, {} new, {} deleted)",
+                    duration_ms, total_files, changed_files, new_files, deleted_count
+                )));
+                if self.mode == AppMode::Analyzing || self.mode == AppMode::Booting {
+                    self.mode = AppMode::Ready;
+                }
+            }
             BackgroundEvent::IndexComplete {
                 indexed_files,
                 total_files,
@@ -618,13 +678,12 @@ impl App {
     }
 
     pub(crate) fn start_lsp_background(&mut self) {
-        let root = self.project_root.clone();
+        let handle = nala_lsp::LspHandle::new(&self.project_root, self.diagnostics_store.clone());
+        self.lsp_handle = Some(handle.clone());
+
         let tx = self.bg_tx.clone();
-        let diag_store = self.diagnostics_store.clone();
         tokio::spawn(async move {
-            let mut manager =
-                nala_lsp::LspManager::with_diagnostics_store(&root, diag_store);
-            let server_name = manager.server().to_string();
+            let server_name = handle.server_name().await;
             if server_name == "none" {
                 let _ = tx
                     .send(BackgroundEvent::LspStartFailed(
@@ -633,13 +692,13 @@ impl App {
                     .await;
                 return;
             }
-            if let Err(e) = manager.initialize().await {
+            if let Err(e) = handle.initialize().await {
                 let _ = tx
                     .send(BackgroundEvent::LspStartFailed(e.to_string()))
                     .await;
                 return;
             }
-            if !manager.is_initialized() {
+            if !handle.is_initialized().await {
                 let _ = tx
                     .send(BackgroundEvent::LspStartFailed(
                         format!("{} failed to initialize", server_name),
@@ -651,10 +710,8 @@ impl App {
                 .send(BackgroundEvent::LspStarted { server_name })
                 .await;
 
-            // Keep the manager alive so the LSP server continues running and
-            // pushing diagnostics. Park until the channel closes (app quits).
             let _ = tx.closed().await;
-            let _ = manager.shutdown().await;
+            let _ = handle.shutdown().await;
         });
     }
 
@@ -686,6 +743,7 @@ impl App {
 pub const SLASH_COMMANDS: &[&str] = &[
     "/help", "/scan", "/index", "/analyze", "/scope", "/lsp status",
     "/def", "/refs", "/hover", "/diag", "/doctor", "/act",
+    "/memory", "/memory sessions", "/memory forget",
     "/session", "/session new", "/session load", "/session summary",
     "/generate", "/context", "/compact", "/graph",
     "/team", "/team status", "/team cancel",

@@ -16,8 +16,6 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
 fn py_err(e: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
@@ -34,7 +32,24 @@ fn symbol_to_json(s: &nala_indexer::Symbol) -> serde_json::Value {
     })
 }
 
-// ── Module functions ───────────────────────────────────────────────────────
+fn metrics_to_json(m: &nala_indexer::metrics::FileMetrics) -> serde_json::Value {
+    serde_json::json!({
+        "relative_path": m.relative_path,
+        "language":      m.language,
+        "ploc":          m.ploc,
+        "sloc":          m.sloc,
+        "cloc":          m.cloc,
+        "blank":         m.blank,
+        "cyclomatic":    m.cyclomatic,
+        "functions":     m.function_complexity.iter().map(|f| serde_json::json!({
+            "name":       f.name,
+            "start_line": f.start_line,
+            "end_line":   f.end_line,
+            "cyclomatic": f.cyclomatic,
+            "severity":   f.severity().to_string(),
+        })).collect::<Vec<_>>(),
+    })
+}
 
 /// Return the version of the nala_core native module.
 #[pyfunction]
@@ -43,13 +58,6 @@ fn version() -> &'static str {
 }
 
 /// Scan a project directory and return a JSON string with the scan result.
-///
-/// Python usage:
-/// ```python
-/// import nala_core, json
-/// result = json.loads(nala_core.scan_project("/path/to/project"))
-/// print(result["total_files"])
-/// ```
 #[pyfunction]
 fn scan_project(path: &str) -> PyResult<String> {
     let result = nala_indexer::scan_project(std::path::Path::new(path))
@@ -66,24 +74,14 @@ fn scan_project(path: &str) -> PyResult<String> {
     Ok(json.to_string())
 }
 
-/// Index a project (scan + parse + symbol extraction) and return JSON.
-///
-/// The returned JSON includes the full symbol list so the Python graph
-/// builder can populate Neo4j without a second Rust call.
-///
-/// Python usage:
-/// ```python
-/// import nala_core, json
-/// result = json.loads(nala_core.index_project("/path/to/project"))
-/// for sym in result["symbols"]:
-///     print(sym["kind"], sym["name"], sym["file_path"])
-/// ```
+/// Index a project (scan + parse + symbol extraction + metrics) and return JSON.
 #[pyfunction]
 fn index_project(path: &str) -> PyResult<String> {
     let result = nala_indexer::index_project(std::path::Path::new(path))
         .map_err(py_err)?;
 
     let symbols: Vec<_> = result.symbols.iter().map(symbol_to_json).collect();
+    let metrics: Vec<_> = result.file_metrics.iter().map(metrics_to_json).collect();
 
     let json = serde_json::json!({
         "indexed_files":    result.indexed_files,
@@ -94,15 +92,13 @@ fn index_project(path: &str) -> PyResult<String> {
         "index_duration_ms": result.index_duration.as_millis(),
         "total_files":      result.scan_result.total_files,
         "symbols":          symbols,
+        "file_metrics":     metrics,
     });
 
     Ok(json.to_string())
 }
 
 /// Return all symbols for a project as a JSON array.
-///
-/// Equivalent to `index_project(...)[\"symbols\"]` but returns only the
-/// symbols list, which is more convenient when the caller only needs symbols.
 #[pyfunction]
 fn get_all_symbols(path: &str) -> PyResult<String> {
     let result = nala_indexer::index_project(std::path::Path::new(path))
@@ -112,17 +108,22 @@ fn get_all_symbols(path: &str) -> PyResult<String> {
     serde_json::to_string(&symbols).map_err(py_err)
 }
 
-// ── Module definition ──────────────────────────────────────────────────────
+/// Compute code quality metrics for a project and return JSON.
+#[pyfunction]
+fn get_file_metrics(path: &str) -> PyResult<String> {
+    let result = nala_indexer::index_project(std::path::Path::new(path))
+        .map_err(py_err)?;
 
-/// The nala_core Python module.
-///
-/// This is the native extension module exposing Rust-speed operations to the
-/// Python orchestrator. It is built with Maturin and importable as `nala_core`.
+    let metrics: Vec<_> = result.file_metrics.iter().map(metrics_to_json).collect();
+    serde_json::to_string(&metrics).map_err(py_err)
+}
+
 #[pymodule]
 fn nala_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(scan_project, m)?)?;
     m.add_function(wrap_pyfunction!(index_project, m)?)?;
     m.add_function(wrap_pyfunction!(get_all_symbols, m)?)?;
+    m.add_function(wrap_pyfunction!(get_file_metrics, m)?)?;
     Ok(())
 }

@@ -11,5 +11,5 @@ pub mod config;
 pub mod diagnostics;
 pub(crate) mod transport;
 
-pub use client::{DefinitionLocation, HoverInfo, LspManager, Reference};
+pub use client::{DefinitionLocation, HoverInfo, LspHandle, Reference};
 pub use diagnostics::{DiagSeverity, Diagnostic, DiagnosticsStore};
