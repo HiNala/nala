@@ -126,6 +126,8 @@ pub enum BridgeRequest {
     AgentHotspot,
     AgentStop,
     AgentResume,
+    AgentApprove { approved: bool },
+    AgentMode { mode: String },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -437,6 +439,16 @@ impl PythonBridge {
 
     pub async fn agent_resume(&self) -> Result<()> {
         self.request_tx.send(BridgeRequest::AgentResume).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_approve(&self, approved: bool) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentApprove { approved }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_mode(&self, mode: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentMode { mode }).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -773,6 +785,16 @@ async fn bridge_task(
                             BridgeRequest::AgentResume => json!({
                                 "id": id,
                                 "type": "agent_resume",
+                            }),
+                            BridgeRequest::AgentApprove { approved } => json!({
+                                "id": id,
+                                "type": "agent_approve",
+                                "approved": approved,
+                            }),
+                            BridgeRequest::AgentMode { mode } => json!({
+                                "id": id,
+                                "type": "agent_mode",
+                                "mode": mode,
                             }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
@@ -1115,7 +1137,36 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 suggestions,
             }).await;
         }
-        // "pong", "ready" — informational, no UI event needed
+        "agent_state" => {
+            let run_id = msg.get("run_id").and_then(|v| v.as_str())
+                .unwrap_or("").to_string();
+            let phase = msg.get("phase").and_then(|v| v.as_str())
+                .unwrap_or("idle").to_string();
+            let objective = msg.get("objective").and_then(|v| v.as_str())
+                .unwrap_or("").to_string();
+            let scope = msg.get("scope").and_then(|v| v.as_str())
+                .unwrap_or("").to_string();
+            let mode = msg.get("mode").and_then(|v| v.as_str())
+                .unwrap_or("plan").to_string();
+            let task_id = msg.get("task_id").and_then(|v| v.as_str())
+                .unwrap_or("").to_string();
+            let plan_steps: Vec<String> = msg.get("plan_steps")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let verification_summary = msg.get("verification_summary")
+                .and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let _ = bg_tx.send(BackgroundEvent::AgentStateUpdated {
+                run_id,
+                phase,
+                objective,
+                scope,
+                mode,
+                task_id,
+                plan_steps,
+                verification_summary,
+            }).await;
+        }
         _ => {}
     }
 }

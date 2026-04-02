@@ -62,12 +62,21 @@ class AgentVerification:
         return f"Verification: {status} ({len(self.commands_executed)} checks)"
 
 
+class AutonomyLevel(str, Enum):
+    """Controls how much the agent can do without asking."""
+    OBSERVE = "observe"
+    PLAN = "plan"
+    PATCH = "patch"
+    AUTONOMOUS = "autonomous"
+
+
 @dataclass
 class AgentRun:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     objective: str = ""
     phase: AgentPhase = AgentPhase.IDLE
     scope: str = ""
+    autonomy: AutonomyLevel = AutonomyLevel.PLAN
     plan: AgentPlan = field(default_factory=AgentPlan)
     verification: AgentVerification = field(default_factory=AgentVerification)
     current_task_id: str = ""
@@ -86,12 +95,14 @@ class AgentRun:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["phase"] = self.phase.value
+        d["autonomy"] = self.autonomy.value
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> AgentRun:
         d = dict(d)
         d["phase"] = AgentPhase(d.get("phase", "idle"))
+        d["autonomy"] = AutonomyLevel(d.get("autonomy", "plan"))
         plan_raw = d.pop("plan", {})
         verification_raw = d.pop("verification", {})
         run = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})

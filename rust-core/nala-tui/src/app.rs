@@ -167,6 +167,16 @@ pub enum BackgroundEvent {
         has_sessions: bool,
         suggestions: Vec<String>,
     },
+    AgentStateUpdated {
+        run_id: String,
+        phase: String,
+        objective: String,
+        scope: String,
+        mode: String,
+        task_id: String,
+        plan_steps: Vec<String>,
+        verification_summary: String,
+    },
 }
 
 // ── App ────────────────────────────────────────────────────────────────────
@@ -213,6 +223,16 @@ pub struct App {
     pub has_index_snapshot: bool,
     pub last_index_symbol_payload: Vec<nala_indexer::Symbol>,
     pub startup_intel: Option<StartupIntel>,
+    // ── Agent workbench state ──
+    pub agent_panel_open: bool,
+    pub agent_phase: String,
+    pub agent_objective: String,
+    pub agent_run_id: String,
+    pub agent_scope: String,
+    pub agent_plan_steps: Vec<String>,
+    pub agent_mode: String,
+    pub agent_task_id: String,
+    pub agent_verification_summary: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -347,6 +367,15 @@ impl App {
             has_index_snapshot: false,
             last_index_symbol_payload: Vec::new(),
             startup_intel: None,
+            agent_panel_open: false,
+            agent_phase: String::new(),
+            agent_objective: String::new(),
+            agent_run_id: String::new(),
+            agent_scope: String::new(),
+            agent_plan_steps: Vec::new(),
+            agent_mode: "plan".to_string(),
+            agent_task_id: String::new(),
+            agent_verification_summary: String::new(),
         })
     }
 
@@ -515,6 +544,10 @@ impl App {
                 }
                 Char('e') => {
                     self.panels.session_panel_open = !self.panels.session_panel_open;
+                    return;
+                }
+                Char('g') => {
+                    self.agent_panel_open = !self.agent_panel_open;
                     return;
                 }
                 Left => {
@@ -959,6 +992,32 @@ impl App {
                     suggestions,
                 });
             }
+            BackgroundEvent::AgentStateUpdated {
+                run_id,
+                phase,
+                objective,
+                scope,
+                mode,
+                task_id,
+                plan_steps,
+                verification_summary,
+            } => {
+                self.agent_run_id = run_id;
+                self.agent_phase = phase.clone();
+                self.agent_objective = objective;
+                self.agent_scope = scope;
+                self.agent_mode = mode;
+                self.agent_task_id = task_id;
+                self.agent_plan_steps = plan_steps;
+                self.agent_verification_summary = verification_summary;
+                if phase == "idle" || phase == "done" || phase == "cancelled" {
+                    if self.agent_panel_open && phase != "idle" {
+                        // keep panel open so user sees final state
+                    }
+                } else if !self.agent_panel_open {
+                    self.agent_panel_open = true;
+                }
+            }
         }
     }
 
@@ -1040,10 +1099,16 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/agent review",
     "/agent verify",
     "/agent hotspot",
+    "/agent approve",
+    "/agent reject",
     "/agent status",
     "/agent stop",
     "/agent resume",
     "/agent investigate",
+    "/agent mode observe",
+    "/agent mode plan",
+    "/agent mode patch",
+    "/agent mode autonomous",
     // ── Stable commands ──
     "/help",
     "/scan",

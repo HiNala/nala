@@ -18,7 +18,13 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 - **LSP integration** — go-to-definition, find-references, hover, live diagnostics
 - **Analysis perspectives** — security, complexity, churn, performance, dependency audits
 - **Session management** — save, resume, and review past analysis sessions
-- **Agent workflow** — `/agent` unified autonomous entrypoint: plan, run, review, verify, hotspot triage
+- **Agent workflow** — `/agent` unified autonomous entrypoint: plan, approve, run, review, verify, hotspot
+- **Agent workbench** — toggleable panel (`Ctrl+G`) showing phase, objective, plan steps, verification
+- **Autonomy levels** — `/agent mode observe|plan|patch|autonomous` controls how far the agent runs
+- **Skill system** — built-in skills (triage-hotspots, review-diff, refactor-safely, repair-failures) + user skills in `.nala/agent/skills/`
+- **Project brief + scoped guidance** — durable `.nala/agent/project-brief.md` and per-directory scopes auto-loaded into agent context
+- **Verification recipes** — auto-detects Rust (`cargo check/test`), Python (`ruff/pytest`), Node (`npm test/lint`) commands
+- **Approval workflow** — `/agent approve` / `/agent reject` gates before execution
 - **Action mode** — `/agent <instruction>` to propose file edits with diff preview + y/n confirmation
 - **Context window management** — `/context` usage, `/compact` compaction with handoff docs
 - **Clipboard paste** — bracketed paste support for pasting text from clipboard into input
@@ -109,7 +115,11 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `/agent verify` | Run verification analysis |
 | `/agent hotspot` | Quick hotspot triage for high-value work |
 | `/agent status` | Show objective, phase, tasks, git state |
+| `/agent approve` | Approve the pending plan and start execution |
+| `/agent reject` | Reject the pending plan (revise with `/agent plan`) |
 | `/agent stop` | Cancel the active run |
+| `/agent resume` | Resume a paused or blocked run |
+| `/agent mode <level>` | Set autonomy: `observe`, `plan`, `patch`, `autonomous` |
 
 **Code Intelligence:**
 
@@ -154,6 +164,7 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 |-----|--------|
 | `Ctrl+B` | Toggle file tree panel |
 | `Ctrl+E` | Toggle session panel |
+| `Ctrl+G` | Toggle agent workbench panel |
 | `Ctrl+←` / `Ctrl+→` | Jump word left/right |
 | `Ctrl+W` | Delete word backward |
 | `↑` / `↓` | Navigate command history |
@@ -244,7 +255,9 @@ nala/
 │       ├── graph/          Neo4j code knowledge graph
 │       ├── perspectives/   Analysis engines (complexity, security, churn, …)
 │       ├── sessions/       Session management and report generation
-│       └── agents/         LLM query orchestration, action extraction/execution
+│       ├── agents/         LLM query orchestration, action extraction/execution
+│       ├── agent_runtime/  Central control plane: manager, state, toolbox
+│       └── skills/         Reusable agent workflow recipes (built-in + user)
 ├── dashboard/              Optional FastAPI + D3.js web dashboard
 ├── scripts/                Setup and benchmark scripts
 └── docs/missions/          Complete build plan (26 missions)
@@ -278,7 +291,8 @@ The build is structured through Mission 26 (and growing). Each mission is in `do
 | Agent Actions | 11-16 | Missions, LLM integration, inline edits, polish |
 | Docs | 17-19 | Architecture, data flow, extension docs |
 | Context & Memory | 20-24 | Context mgmt, memory, handoff, multi-agent, compression |
-| Objective Agent | 25-26 | Objective-driven workflows and optional Brain Mode |
+| Objective Agent | 25-28 | Objective-driven workflows, command surface, control plane |
+| Agent UX | 29-31 | Agent workbench TUI, autonomous loop, skills & memory |
 
 ---
 

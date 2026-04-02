@@ -11,7 +11,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .state import AgentPhase, AgentPlan, AgentRun, load_run, save_run
+from ..skills.registry import SkillRegistry
+from .state import AgentPhase, AgentPlan, AgentRun, AutonomyLevel, load_run, save_run
 from .toolbox import Toolbox
 
 if TYPE_CHECKING:
@@ -44,6 +45,8 @@ class AgentManager:
             AgentPhase.DONE, AgentPhase.CANCELLED,
         ):
             self._run = None
+        self._mode: str = "plan"
+        self.skills = SkillRegistry(project_root)
 
     # ── Accessors ─────────────────────────────────────────────────────
 
@@ -62,6 +65,69 @@ class AgentManager:
 
     def set_task_ledger(self, ledger: TaskLedger) -> None:
         self.toolbox.set_task_ledger(ledger)
+
+    def set_mode(self, mode: str) -> None:
+        allowed = {"observe", "plan", "patch", "autonomous"}
+        if mode in allowed:
+            self._mode = mode
+            if self._run:
+                self._run.autonomy = AutonomyLevel(mode)
+                save_run(self.project_root, self._run)
+
+    # ── Project brief + scoped guidance ────────────────────────────────
+
+    def load_project_brief(self) -> str:
+        """Read .nala/agent/project-brief.md if it exists."""
+        brief = self.project_root / ".nala" / "agent" / "project-brief.md"
+        if brief.exists():
+            return brief.read_text(encoding="utf-8")
+        return ""
+
+    def load_scoped_guidance(self, scope_hint: str = "") -> str:
+        """Load relevant scoped guidance files from .nala/agent/scopes/."""
+        scopes_dir = self.project_root / ".nala" / "agent" / "scopes"
+        if not scopes_dir.exists():
+            return ""
+        parts: list[str] = []
+        for md_file in sorted(scopes_dir.glob("*.md")):
+            if scope_hint and scope_hint.lower() not in md_file.stem.lower():
+                continue
+            content = md_file.read_text(encoding="utf-8")
+            if content.strip():
+                parts.append(content.strip())
+        return "\n\n---\n\n".join(parts)
+
+    # ── Verification recipes ──────────────────────────────────────────
+
+    def detect_verification_commands(self) -> list[str]:
+        """Detect project-appropriate verification commands."""
+        root = self.project_root
+        commands: list[str] = []
+        if (root / "Cargo.toml").exists():
+            commands.append("cargo check")
+            if (root / "Cargo.lock").exists():
+                commands.append("cargo test")
+        if (root / "pyproject.toml").exists() or (root / "setup.py").exists():
+            commands.append("python -m ruff check .")
+            if (root / "pytest.ini").exists() or (
+                root / "pyproject.toml"
+            ).exists():
+                commands.append("python -m pytest --tb=short -q")
+        if (root / "package.json").exists():
+            pkg = root / "package.json"
+            try:
+                import json as _json
+                data = _json.loads(pkg.read_text())
+                scripts = data.get("scripts", {})
+                if "test" in scripts:
+                    commands.append("npm test")
+                if "lint" in scripts:
+                    commands.append("npm run lint")
+            except Exception:
+                commands.append("npm test")
+        if (root / "Makefile").exists():
+            commands.append("make check")
+        return commands
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -94,12 +160,30 @@ class AgentManager:
                 return
 
         self._transition(AgentPhase.PLANNING)
-        prompt = (
-            f"Create a detailed step-by-step plan for: {self._run.objective}\n"
-            f"Scope: {self._run.scope or 'entire project'}\n"
+
+        brief = self.load_project_brief()
+        guidance = self.load_scoped_guidance(self._run.scope)
+        verification_cmds = self.detect_verification_commands()
+
+        context_parts = [
+            f"Create a detailed step-by-step plan for: {self._run.objective}",
+            f"Scope: {self._run.scope or 'entire project'}",
+        ]
+        if brief:
+            context_parts.append(f"\n[PROJECT BRIEF]\n{brief}\n[END BRIEF]")
+        if guidance:
+            context_parts.append(
+                f"\n[SCOPED GUIDANCE]\n{guidance}\n[END GUIDANCE]"
+            )
+        if verification_cmds:
+            context_parts.append(
+                f"\nAvailable verification: {', '.join(verification_cmds)}"
+            )
+        context_parts.append(
             "Format each step as a numbered list. Include risk assessment "
             "and verification commands at the end."
         )
+        prompt = "\n".join(context_parts)
 
         full_text: list[str] = []
         async for chunk in self.toolbox.stream_action_query(prompt):
@@ -107,10 +191,37 @@ class AgentManager:
             yield chunk
 
         self._run.plan = AgentPlan(
-            steps=[f"(AI-generated plan — {len(full_text)} tokens)"],
+            steps=[
+                line.strip().lstrip("0123456789. ")
+                for line in "".join(full_text).split("\n")
+                if line.strip() and line.strip()[0].isdigit()
+            ][:20] or [f"(AI-generated plan — {len(full_text)} chunks)"],
             scope_description=self._run.scope or "entire project",
+            verification_commands=verification_cmds,
         )
         self._transition(AgentPhase.AWAITING_APPROVAL)
+
+    async def approve(self, approved: bool = True) -> AsyncIterator[str]:
+        """Handle plan approval or rejection."""
+        if self._run is None:
+            yield "No active agent run."
+            return
+        if self._run.phase != AgentPhase.AWAITING_APPROVAL:
+            yield (
+                f"Cannot approve in phase `{self._run.phase.value}`. "
+                "Run `/agent plan` first."
+            )
+            return
+        if approved:
+            yield "Plan approved. Starting execution...\n"
+            async for chunk in self.run_execution():
+                yield chunk
+        else:
+            self._transition(AgentPhase.PLANNING)
+            yield (
+                "Plan rejected. Use `/agent plan <feedback>` to revise, "
+                "or `/agent stop` to cancel."
+            )
 
     async def run_execution(self) -> AsyncIterator[str]:
         """Execute the plan using the multi-agent team."""
@@ -143,34 +254,65 @@ class AgentManager:
             self._transition(AgentPhase.REVIEWING)
         diff = self.toolbox.git_diff()
         status = self.toolbox.git_status()
-        return f"## Current Changes\n\n{diff}\n\n## Git Status\n\n{status}"
+        branch = self.toolbox.git_branch()
+        parts = ["## Current Changes\n"]
+        if branch:
+            parts.append(f"**Branch:** {branch}\n")
+        parts.append(f"{diff}\n\n## Git Status\n\n{status}")
+        return "\n".join(parts)
 
     async def verify(self) -> AsyncIterator[str]:
-        """Run verification analysis."""
+        """Run verification: execute detected commands then summarise."""
         if self._run:
             self._transition(AgentPhase.VERIFYING)
 
+        commands = self.detect_verification_commands()
+        cmd_results: list[str] = []
+
+        if commands:
+            yield "## Running verification commands\n\n"
+            for cmd in commands:
+                yield f"**`{cmd}`** → "
+                result = self.toolbox.run_shell(cmd)
+                passed = result["exit_code"] == 0
+                status = "PASS" if passed else "FAIL"
+                yield f"{status}\n"
+                cmd_results.append(
+                    f"- `{cmd}` → {status}"
+                    + (f"\n  ```\n{result['output'][-500:]}\n  ```" if not passed else "")
+                )
+            yield "\n"
+        else:
+            yield "No project-specific verification commands detected.\n"
+
+        yield "## AI Verification Summary\n\n"
         prompt = (
-            "Run a quick verification of the current codebase state. "
-            "Check for: compilation errors, obvious bugs, test failures, "
-            "and any regressions from recent changes."
+            "Review the current codebase state and the following verification results:\n"
+            + "\n".join(cmd_results)
+            + "\nCheck for: compilation errors, obvious bugs, test failures, "
+            "and any regressions from recent changes. Summarize findings."
         )
         async for chunk in self.toolbox.stream_query(prompt):
             yield chunk
 
         if self._run:
+            from .state import AgentVerification
+            self._run.verification = AgentVerification(
+                commands_executed=[c for c in commands],
+                results=cmd_results,
+                passed=all("PASS" in r for r in cmd_results) if cmd_results else None,
+            )
             self._transition(AgentPhase.DONE)
             self.toolbox.complete_task("Agent verification completed")
             save_run(self.project_root, self._run)
 
     async def hotspot(self) -> AsyncIterator[str]:
-        """Run quick hotspot triage."""
-        prompt = (
-            "Analyze the codebase and identify the top 5 hotspots that "
-            "would benefit most from improvement. Consider: complexity, "
-            "code churn, error-prone patterns, and architectural risks. "
-            "For each hotspot, suggest a specific actionable improvement."
-        )
+        """Run quick hotspot triage using the built-in skill."""
+        prompt = self.skills.resolve("triage-hotspots")
+        if prompt is None:
+            prompt = (
+                "Analyze the codebase and identify the top 5 hotspots."
+            )
         async for chunk in self.toolbox.stream_query(prompt):
             yield chunk
 
@@ -179,6 +321,7 @@ class AgentManager:
         parts: list[str] = []
         if self._run:
             parts.append(self._run.status_text())
+            parts.append(f"**Autonomy:** {self._mode.upper()}")
         else:
             parts.append("No active agent run. Use `/agent <objective>` to start.")
 
@@ -216,7 +359,22 @@ class AgentManager:
         """Start a new run and stream the action query response."""
         self.start(objective)
         self._transition(AgentPhase.EXECUTING)
-        async for chunk in self.toolbox.stream_action_query(objective):
+
+        brief = self.load_project_brief()
+        guidance = self.load_scoped_guidance()
+        enriched = objective
+        if brief:
+            enriched = (
+                f"[PROJECT BRIEF]\n{brief[:2000]}\n[END BRIEF]\n\n"
+                + enriched
+            )
+        if guidance:
+            enriched = (
+                f"[SCOPED GUIDANCE]\n{guidance[:1000]}\n[END GUIDANCE]\n\n"
+                + enriched
+            )
+
+        async for chunk in self.toolbox.stream_action_query(enriched):
             yield chunk
         if self._run:
             self._transition(AgentPhase.REVIEWING)

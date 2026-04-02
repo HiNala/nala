@@ -138,12 +138,12 @@ If verification fails, the runtime should be able to:
 
 ## Acceptance Criteria
 
-- [ ] `/agent <objective>` creates a scoped plan before editing
-- [ ] The user must approve before execution begins
-- [ ] Execution happens in bounded batches with artifact tracking
-- [ ] Verification is a first-class phase, not an afterthought
-- [ ] Failures are summarized clearly and can trigger a bounded repair loop
-- [ ] The final summary explains what changed, what passed, what failed, and what remains risky
+- [x] `/agent <objective>` creates a scoped plan before editing
+- [x] The user must approve before execution begins
+- [x] Execution happens in bounded batches with artifact tracking
+- [x] Verification is a first-class phase, not an afterthought
+- [x] Failures are summarized clearly and can trigger a bounded repair loop
+- [x] The final summary explains what changed, what passed, what failed, and what remains risky
 
 ## Estimated Complexity
 

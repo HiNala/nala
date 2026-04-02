@@ -119,6 +119,29 @@ class Toolbox:
         )
         return format_results_as_text(results)
 
+    # ── Shell / verification ────────────────────────────────────────
+
+    def run_shell(self, command: str, timeout: int = 60) -> dict:
+        """Run a shell command and return {exit_code, output}."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=str(self.project_root),
+                timeout=timeout,
+            )
+            return {
+                "exit_code": result.returncode,
+                "output": (result.stdout + result.stderr).strip(),
+            }
+        except subprocess.TimeoutExpired:
+            return {"exit_code": -1, "output": f"Command timed out after {timeout}s"}
+        except Exception as e:
+            return {"exit_code": -1, "output": str(e)}
+
     # ── LLM queries ──────────────────────────────────────────────────
 
     async def stream_query(self, message: str):

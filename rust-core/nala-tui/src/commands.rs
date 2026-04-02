@@ -1225,10 +1225,14 @@ impl App {
                      - `/agent review`       — review current diff and pending changes\n\
                      - `/agent verify`       — run verification analysis\n\
                      - `/agent hotspot`      — quick hotspot triage to find high-value work\n\
+                     - `/agent approve`      — approve the pending plan\n\
+                     - `/agent reject`       — reject the pending plan\n\
                      - `/agent status`       — show objective, phase, tasks, git state\n\
                      - `/agent stop`         — cancel the active run\n\
-                     - `/agent resume`       — resume a paused or blocked run\n\n\
-                     **Workflow:** plan → approve → run → review → verify → done.",
+                     - `/agent resume`       — resume a paused or blocked run\n\
+                     - `/agent mode <level>` — set autonomy: observe, plan, patch, autonomous\n\n\
+                     **Workflow:** plan → approve → run → review → verify → done.\n\
+                     **Keybindings:** `Ctrl+G` toggles the agent workbench panel.",
                 ));
             }
             "plan" => {
@@ -1281,6 +1285,40 @@ impl App {
                 self.agent_dispatch(|b, _tx| async move {
                     b.agent_resume().await.map_err(|e| e.to_string())
                 });
+            }
+            "approve" | "yes" => {
+                self.push_message(Message::system("Agent: plan approved, proceeding..."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_approve(true).await.map_err(|e| e.to_string())
+                });
+            }
+            "reject" | "no" => {
+                self.push_message(Message::system(
+                    "Agent: plan rejected. Revise with /agent plan <feedback>.",
+                ));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_approve(false).await.map_err(|e| e.to_string())
+                });
+            }
+            "mode" => {
+                let mode = rest.to_string();
+                match mode.as_str() {
+                    "observe" | "plan" | "patch" | "autonomous" => {
+                        self.push_message(Message::system(format!(
+                            "Agent: autonomy mode set to {}",
+                            mode.to_uppercase()
+                        )));
+                        self.agent_mode = mode.clone();
+                        self.agent_dispatch(move |b, _tx| async move {
+                            b.agent_mode(mode).await.map_err(|e| e.to_string())
+                        });
+                    }
+                    _ => {
+                        self.push_message(Message::error(
+                            "Usage: /agent mode <observe|plan|patch|autonomous>",
+                        ));
+                    }
+                }
             }
             "investigate" | "refactor" | "work" => {
                 if rest.is_empty() {

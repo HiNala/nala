@@ -27,6 +27,16 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         format!(" {}", app.status_text)
     };
 
+    if !app.agent_phase.is_empty()
+        && app.agent_phase != "idle"
+        && app.agent_phase != "done"
+    {
+        detail.push_str(&format!("  agent:{}", app.agent_phase.to_uppercase()));
+        if !app.agent_mode.is_empty() {
+            detail.push_str(&format!("[{}]", app.agent_mode.to_uppercase()));
+        }
+    }
+
     if app.context_effective_limit > 0 && area.width >= 90 {
         let bar = context_bar(app.context_utilization_pct);
         detail.push_str(&format!(

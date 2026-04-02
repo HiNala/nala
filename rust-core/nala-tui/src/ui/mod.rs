@@ -3,6 +3,7 @@
 //! Each submodule is responsible for rendering one region of the screen.
 //! None of them mutate state — they only read from `App` and draw to `Frame`.
 
+pub mod agent_panel;
 pub mod command_bar;
 pub mod diff;
 pub mod file_panel;

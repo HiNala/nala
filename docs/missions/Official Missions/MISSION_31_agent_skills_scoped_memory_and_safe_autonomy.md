@@ -144,12 +144,12 @@ The project brief and scope files should be updated from:
 
 ## Acceptance Criteria
 
-- [ ] `.nala/brain/` has been migrated to `.nala/agent/` for the new workflow
-- [ ] `/agent` can load a durable project brief and directory-scoped guidance
-- [ ] Skills exist and are actually used by the runtime
-- [ ] The user can choose autonomy levels explicitly
-- [ ] Riskier runs can opt into worktree isolation
-- [ ] Agent memory improves continuity across sessions without becoming opaque
+- [x] `.nala/brain/` has been migrated to `.nala/agent/` for the new workflow
+- [x] `/agent` can load a durable project brief and directory-scoped guidance
+- [x] Skills exist and are actually used by the runtime
+- [x] The user can choose autonomy levels explicitly
+- [ ] Riskier runs can opt into worktree isolation (deferred — requires git worktree infra)
+- [x] Agent memory improves continuity across sessions without becoming opaque
 
 ## Estimated Complexity
 

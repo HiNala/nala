@@ -126,12 +126,12 @@ so the user can inspect changes before continuing execution.
 
 ## Acceptance Criteria
 
-- [ ] `/agent` has a dedicated inspectable UI surface in the TUI
-- [ ] The workbench shows objective, phase, tasks, and verification state
-- [ ] The user can toggle the workbench on and off without breaking normal chat flow
-- [ ] Diff review and approval can happen inside the same workflow
-- [ ] The status bar clearly reflects active agent state
-- [ ] Narrow terminals degrade gracefully
+- [x] `/agent` has a dedicated inspectable UI surface in the TUI
+- [x] The workbench shows objective, phase, tasks, and verification state
+- [x] The user can toggle the workbench on and off without breaking normal chat flow
+- [x] Diff review and approval can happen inside the same workflow
+- [x] The status bar clearly reflects active agent state
+- [x] Narrow terminals degrade gracefully
 
 ## Estimated Complexity
 

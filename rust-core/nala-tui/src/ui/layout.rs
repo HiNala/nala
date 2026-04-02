@@ -14,7 +14,9 @@
 //!   └──────────────────────────────────────┘
 
 use crate::app::{App, AppMode, MessageKind};
-use crate::ui::{command_bar, diff, file_panel, markdown, session_panel, splash, status_bar, theme};
+use crate::ui::{
+    agent_panel, command_bar, diff, file_panel, markdown, session_panel, splash, status_bar, theme,
+};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -47,28 +49,30 @@ pub fn render(frame: &mut Frame, app: &App) {
 fn render_body(frame: &mut Frame, app: &App, area: Rect) {
     let requested_left = app.panels.file_panel_open;
     let requested_right = app.panels.session_panel_open;
+    let requested_agent = app.agent_panel_open;
     let side_width = if area.width >= 140 { 28 } else { 22 };
-    let min_main_width = 60;
-    let both_fit = area.width >= min_main_width + (side_width * 2);
-    let one_fit = area.width >= min_main_width + side_width;
+    let agent_width: u16 = if area.width >= 160 { 36 } else { 28 };
+    let min_main_width: u16 = 60;
 
-    let (left_open, right_open) = match (requested_left, requested_right) {
-        (true, true) if both_fit => (true, true),
-        (true, false) if one_fit => (true, false),
-        (false, true) if one_fit => (false, true),
-        _ => (false, false),
-    };
+    let available_for_sides = area.width.saturating_sub(min_main_width);
+    let left_open = requested_left && available_for_sides >= side_width;
+    let used_left = if left_open { side_width } else { 0 };
+    let right_open = requested_right && (available_for_sides - used_left) >= side_width;
+    let used_right = if right_open { side_width } else { 0 };
+    let agent_open =
+        requested_agent && (available_for_sides - used_left - used_right) >= agent_width;
 
-    let constraints = match (left_open, right_open) {
-        (true, true) => vec![
-            Constraint::Length(side_width),
-            Constraint::Fill(1),
-            Constraint::Length(side_width),
-        ],
-        (true, false) => vec![Constraint::Length(side_width), Constraint::Fill(1)],
-        (false, true) => vec![Constraint::Fill(1), Constraint::Length(side_width)],
-        (false, false) => vec![Constraint::Fill(1)],
-    };
+    let mut constraints: Vec<Constraint> = Vec::new();
+    if left_open {
+        constraints.push(Constraint::Length(side_width));
+    }
+    constraints.push(Constraint::Fill(1));
+    if right_open {
+        constraints.push(Constraint::Length(side_width));
+    }
+    if agent_open {
+        constraints.push(Constraint::Length(agent_width));
+    }
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -97,6 +101,10 @@ fn render_body(frame: &mut Frame, app: &App, area: Rect) {
     col_idx += 1;
     if right_open {
         session_panel::render(frame, app, cols[col_idx]);
+        col_idx += 1;
+    }
+    if agent_open {
+        agent_panel::render(frame, app, cols[col_idx]);
     }
 }
 

@@ -141,14 +141,29 @@ def write_response(data: dict) -> None:
         print(line, flush=True)
 
 
-def _ensure_brain_scaffold(root: Path) -> None:
-    """Create durable Brain Mode artifacts if they do not exist yet."""
-    brain_dir = root / ".nala" / "brain"
-    scopes_dir = brain_dir / "scopes"
-    brain_dir.mkdir(parents=True, exist_ok=True)
-    scopes_dir.mkdir(parents=True, exist_ok=True)
+def _ensure_agent_scaffold(root: Path) -> None:
+    """Create durable agent artifacts under .nala/agent/ if missing."""
+    agent_dir = root / ".nala" / "agent"
+    scopes_dir = agent_dir / "scopes"
+    skills_dir = agent_dir / "skills"
+    runs_dir = agent_dir / "runs"
+    for d in (agent_dir, scopes_dir, skills_dir, runs_dir):
+        d.mkdir(parents=True, exist_ok=True)
 
-    project_brief = brain_dir / "project-brief.md"
+    # Migrate old .nala/brain/ artefacts if they exist
+    old_brain = root / ".nala" / "brain"
+    if old_brain.exists():
+        import shutil
+        for child in old_brain.iterdir():
+            dest = agent_dir / child.name
+            if not dest.exists():
+                if child.is_dir():
+                    shutil.copytree(child, dest)
+                else:
+                    shutil.copy2(child, dest)
+        log.info("Migrated .nala/brain/ → .nala/agent/")
+
+    project_brief = agent_dir / "project-brief.md"
     if not project_brief.exists():
         project_brief.write_text(
             (
@@ -229,6 +244,39 @@ def _stream_text(req_id: str, text: str, chunk_size: int = 200) -> None:
         write_response({"id": req_id, "type": "chunk", "text": text[offset:end]})
         offset = end
     write_response({"id": req_id, "type": "done"})
+
+
+def _broadcast_agent_state(req_id: str) -> None:
+    """Push a structured agent_state update to the TUI."""
+    if _agent_manager is None or _agent_manager.current_run is None:
+        write_response({
+            "id": req_id,
+            "type": "agent_state",
+            "run_id": "",
+            "phase": "idle",
+            "objective": "",
+            "scope": "",
+            "mode": getattr(_agent_manager, "_mode", "plan") if _agent_manager else "plan",
+            "task_id": "",
+            "plan_steps": [],
+            "verification_summary": "",
+        })
+        return
+    run = _agent_manager.current_run
+    write_response({
+        "id": req_id,
+        "type": "agent_state",
+        "run_id": run.run_id,
+        "phase": run.phase.value,
+        "objective": run.objective,
+        "scope": run.scope,
+        "mode": getattr(_agent_manager, "_mode", "plan"),
+        "task_id": run.current_task_id,
+        "plan_steps": run.plan.steps if run.plan else [],
+        "verification_summary": (
+            run.verification.summary() if run.verification else ""
+        ),
+    })
 
 
 def _normalise_severity(value: object) -> str:
@@ -1024,9 +1072,11 @@ async def handle_request(
             write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
             return
         try:
+            _broadcast_agent_state(req_id)
             async for chunk in _agent_manager.handle_objective(objective):
                 write_response({"id": req_id, "type": "chunk", "text": chunk})
             write_response({"id": req_id, "type": "done"})
+            _broadcast_agent_state(req_id)
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": str(e)})
 
@@ -1045,6 +1095,7 @@ async def handle_request(
             async for chunk in _agent_manager.plan(topic):
                 write_response({"id": req_id, "type": "chunk", "text": chunk})
             write_response({"id": req_id, "type": "done"})
+            _broadcast_agent_state(req_id)
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": str(e)})
 
@@ -1053,9 +1104,11 @@ async def handle_request(
             write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
             return
         try:
+            _broadcast_agent_state(req_id)
             async for chunk in _agent_manager.run_execution():
                 write_response({"id": req_id, "type": "chunk", "text": chunk})
             write_response({"id": req_id, "type": "done"})
+            _broadcast_agent_state(req_id)
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": str(e)})
 
@@ -1097,6 +1150,7 @@ async def handle_request(
         else:
             msg = _agent_manager.stop()
             _stream_text(req_id, msg)
+            _broadcast_agent_state(req_id)
 
     elif req_type == "agent_resume":
         if _agent_manager is None:
@@ -1104,6 +1158,33 @@ async def handle_request(
         else:
             msg = _agent_manager.resume()
             _stream_text(req_id, msg)
+            _broadcast_agent_state(req_id)
+
+    elif req_type == "agent_approve":
+        if _agent_manager is None:
+            write_response(
+                {"id": req_id, "type": "error", "text": "Agent runtime not ready"}
+            )
+            return
+        approved = req.get("approved", True)
+        try:
+            async for chunk in _agent_manager.approve(approved):
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+        _broadcast_agent_state(req_id)
+
+    elif req_type == "agent_mode":
+        mode = req.get("mode", "plan").strip()
+        if _agent_manager is None:
+            write_response(
+                {"id": req_id, "type": "error", "text": "Agent runtime not ready"}
+            )
+            return
+        _agent_manager.set_mode(mode)
+        _stream_text(req_id, f"Agent autonomy mode set to **{mode.upper()}**.")
+        _broadcast_agent_state(req_id)
 
     else:
         write_response({"id": req_id, "type": "error", "text": f"Unknown type: {req_type}"})
@@ -1190,7 +1271,7 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
     Runs until stdin closes (Rust process exits or sends EOF).
     """
     root = Path(project_root) if project_root else Path.cwd()
-    _ensure_brain_scaffold(root)
+    _ensure_agent_scaffold(root)
     config = Config.load(project_root=root)
     agent = AgentOrchestrator(config)
 
