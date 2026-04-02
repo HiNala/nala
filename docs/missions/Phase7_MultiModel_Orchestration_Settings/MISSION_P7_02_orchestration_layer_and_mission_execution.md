@@ -205,14 +205,14 @@ The `/agent` command (from Mission 27) should now route objectives to this orche
 
 ## Acceptance Criteria
 
-- [ ] A high-level user objective produces structured mission `.md` files
-- [ ] Mission files are organized by phase and dependency
-- [ ] The orchestrator dispatches missions to workers with appropriate models
-- [ ] Sequential and parallel execution are both supported
-- [ ] Git branching and milestone commits happen automatically
-- [ ] The interpreter terminal receives structured progress updates
-- [ ] The execution loop continues until all missions pass verification or the user stops
-- [ ] User questions from workers are surfaced in the interpreter terminal
+- [x] A high-level user objective produces structured mission `.md` files
+- [x] Mission files are organized by phase and dependency
+- [x] The orchestrator dispatches missions to workers with appropriate models
+- [x] Sequential and parallel execution are both supported
+- [x] Git branching and milestone commits happen automatically
+- [x] The interpreter terminal receives structured progress updates
+- [x] The execution loop continues until all missions pass verification or the user stops
+- [x] User questions from workers are surfaced in the interpreter terminal
 
 ## Estimated Complexity
 

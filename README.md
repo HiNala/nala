@@ -25,6 +25,7 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 - **Project brief + scoped guidance** — durable `.nala/agent/project-brief.md` and per-directory scopes auto-loaded into agent context
 - **Verification recipes** — auto-detects Rust (`cargo check/test`), Python (`ruff/pytest`), Node (`npm test/lint`) commands
 - **Approval workflow** — `/agent approve` / `/agent reject` gates before execution
+- **Mission-driven orchestration** — `/agent objective <goal>` runs full research → plan → execute → verify loop with structured `.md` mission files
 - **Worker architecture** — interpreter/orchestrator/worker three-layer model with up to 3 parallel workers per run
 - **Worker management** — `/agent workers`, `/agent attach`, `/agent message`, `/agent cancel-worker` for full worker control
 - **Git integration** — `/agent scm`, `/agent compare`, `/agent blame`, branch comparison, worktree support
@@ -117,6 +118,9 @@ Just type a question or instruction to chat with the AI. All slash commands:
 | Command | Description |
 |---------|-------------|
 | `/agent <objective>` | Start an autonomous agent run |
+| `/agent objective <goal>` | Full orchestration: research → plan missions → execute → verify |
+| `/agent missions` | Show mission plan status |
+| `/agent approve-missions` | Approve and execute the generated mission plan |
 | `/agent plan [topic]` | Generate a plan |
 | `/agent approve` / `reject` | Accept or revise the plan |
 | `/agent run` | Execute the approved plan |
