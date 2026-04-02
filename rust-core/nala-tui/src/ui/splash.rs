@@ -82,13 +82,18 @@ pub fn render(frame: &mut Frame, app: &App) {
         vertical[4],
     );
 
-    // Animated loading dots
+    // Animated loading dots / progress hint
     let elapsed_ms = app.splash_start.elapsed().as_millis();
     let dot_count = ((elapsed_ms / 300) % 4) as usize;
     let dots = ".".repeat(dot_count);
+    let loading_text = if let Some(progress) = app.index_progress {
+        format!("indexing{} {:>3}%", dots, (progress * 100.0).round() as usize)
+    } else {
+        format!("indexing{}", dots)
+    };
     frame.render_widget(
         Paragraph::new(Span::styled(
-            format!("indexing{}", dots),
+            loading_text,
             Style::default().fg(Color::DarkGray),
         ))
         .alignment(Alignment::Center),

@@ -118,9 +118,9 @@ pub fn compute_file_metrics(source: &str, relative_path: &str, language: &str) -
         }
     }
 
-    // Base cyclomatic complexity starts at 1
-    if metrics.cyclomatic == 0 && metrics.sloc > 0 {
-        metrics.cyclomatic = 1;
+    // Base cyclomatic complexity starts at 1 for any non-empty source unit.
+    if metrics.sloc > 0 {
+        metrics.cyclomatic += 1;
     }
 
     metrics

@@ -104,7 +104,12 @@ impl Message {
 /// Events sent from background tasks to the UI event loop.
 #[derive(Debug)]
 pub enum BackgroundEvent {
-    IndexComplete { files: usize, symbols: usize },
+    IndexComplete {
+        indexed_files: usize,
+        total_files: usize,
+        symbols: usize,
+        symbol_payload: Vec<nala_indexer::Symbol>,
+    },
     IndexError(String),
     AssistantChunk(String),
     AssistantDone,
@@ -168,6 +173,8 @@ pub struct App {
     pub pending_actions: Vec<PendingAction>,
     /// Apply-all flag: skip remaining per-action prompts.
     pub apply_all: bool,
+    /// Optional analysis scope for large repositories.
+    pub analysis_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -206,6 +213,7 @@ impl App {
             llm_available: false,
             pending_actions: Vec::new(),
             apply_all: false,
+            analysis_scope: None,
         })
     }
 
@@ -239,6 +247,7 @@ impl App {
         let mut last_render = Instant::now();
 
         // Kick off background indexing
+        self.index_progress = Some(0.1);
         self.start_background_index();
 
         loop {
@@ -444,7 +453,18 @@ impl App {
             }
             Some(bridge) => {
                 let bridge = bridge.clone();
-                let root = self.project_root.clone();
+                let root = if let Some(scope) = &self.analysis_scope {
+                    self.project_root.join(scope)
+                } else {
+                    self.project_root.clone()
+                };
+                if !root.exists() {
+                    self.push_message(Message::error(format!(
+                        "Scope path does not exist: {}",
+                        root.display()
+                    )));
+                    return;
+                }
                 let tx = self.bg_tx.clone();
                 self.mode = AppMode::Analyzing;
                 self.push_message(Message::system(format!(
@@ -458,6 +478,33 @@ impl App {
                 });
             }
         }
+    }
+
+    fn set_analysis_scope(&mut self, raw: String) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            let current = self
+                .analysis_scope
+                .clone()
+                .unwrap_or_else(|| "<project root>".to_string());
+            self.push_message(Message::assistant(format!("Current analysis scope: {}", current)));
+            return;
+        }
+        if trimmed.eq_ignore_ascii_case("clear") {
+            self.analysis_scope = None;
+            self.push_message(Message::system("Analysis scope reset to full project."));
+            return;
+        }
+        let candidate = self.project_root.join(trimmed);
+        if !candidate.exists() {
+            self.push_message(Message::error(format!(
+                "Scope path not found: {}",
+                candidate.display()
+            )));
+            return;
+        }
+        self.analysis_scope = Some(trimmed.to_string());
+        self.push_message(Message::system(format!("Analysis scope set: {}", trimmed)));
     }
 
     fn send_llm_query(&mut self, text: String) {
@@ -592,7 +639,7 @@ impl App {
         match parts[0] {
             "/help" => {
                 self.push_message(Message::assistant(
-                    "Available commands:\n  /scan               — scan project files\n  /index              — full index (parse + symbols)\n  /analyze            — run all analysis perspectives\n  /analyze <name>     — run one perspective (security, complexity, …)\n  /act <instruction>  — ask AI to make changes (with diff preview + confirm)\n  /graph              — show Neo4j code graph statistics\n  /team <objective>   — start a multi-agent team run\n  /team status        — show current team run status\n  /team cancel        — cancel the current team run\n  /handoff            — show latest session handoff document\n  /handoff save       — save a handoff document now\n  /handoff history    — show full handoff chain\n  /session            — list past sessions\n  /session new        — start a fresh session\n  /session load <id>  — resume a past session\n  /session summary    — show current session summary\n  /generate           — generate a mission doc from findings\n  /generate <focus>   — generate focused on a topic\n  /context            — show context window usage breakdown\n  /compact            — compact context window to free tokens\n  /compact <focus>    — compact while preserving focus topic\n  /clear              — clear message log\n  /help               — show this help\n  /quit               — exit\n\nOr just type a question to ask the AI.",
+                    "Available commands:\n  /scan                  — scan project files\n  /index                 — full index (parse + symbols)\n  /scope                 — show current analysis scope\n  /scope <relative/path> — analyze only that subtree\n  /scope clear           — analyze whole project again\n  /analyze               — run all analysis perspectives\n  /analyze quick         — run fast subset (complexity/security/dependency)\n  /analyze <name>        — run one perspective (security, complexity, …)\n  /def <file:l:c>        — LSP go-to-definition\n  /refs <file:l:c>       — LSP find-references\n  /hover <file:l:c>      — LSP hover docs\n  /lsp status            — show LSP server status for this repo\n  /act <instruction>     — ask AI to make changes (with diff preview + confirm)\n  /graph                 — show Neo4j code graph statistics\n  /team <objective>      — start a multi-agent team run\n  /team status           — show current team run status\n  /team cancel           — cancel the current team run\n  /handoff               — show latest session handoff document\n  /handoff save          — save a handoff document now\n  /handoff history       — show full handoff chain\n  /session               — list past sessions\n  /session new           — start a fresh session\n  /session load <id>     — resume a past session\n  /session summary       — show current session summary\n  /generate              — generate a mission doc from findings\n  /generate <focus>      — generate focused on a topic\n  /context               — show context window usage breakdown\n  /compact               — compact context window to free tokens\n  /compact <focus>       — compact while preserving focus topic\n  /doctor                — environment and readiness diagnostics\n  /clear                 — clear message log\n  /help                  — show this help\n  /quit                  — exit\n\nOr just type a question to ask the AI.",
                 ));
             }
             "/quit" | "/exit" => {
@@ -600,15 +647,44 @@ impl App {
             }
             "/scan" => {
                 self.push_message(Message::system("Scanning project..."));
+                self.index_progress = Some(0.2);
                 self.start_background_index();
             }
             "/index" => {
                 self.push_message(Message::system("Indexing project..."));
+                self.index_progress = Some(0.2);
                 self.start_background_index();
             }
             "/analyze" | "/analyse" => {
                 let perspective = parts.get(1).copied().unwrap_or("all").to_string();
                 self.run_perspectives(perspective);
+            }
+            "/scope" => {
+                let args = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.set_analysis_scope(args);
+            }
+            "/lsp" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                if args == "status" {
+                    self.lsp_status();
+                } else {
+                    self.push_message(Message::error("Usage: /lsp status"));
+                }
+            }
+            "/def" => {
+                let spec = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.lsp_definition(spec);
+            }
+            "/refs" => {
+                let spec = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.lsp_references(spec);
+            }
+            "/hover" => {
+                let spec = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.lsp_hover(spec);
+            }
+            "/doctor" => {
+                self.doctor();
             }
             "/session" => {
                 let args = parts.get(1).copied().unwrap_or("").trim();
@@ -841,6 +917,120 @@ impl App {
         }
     }
 
+    fn doctor(&mut self) {
+        let llm = if self.llm_available { "ready" } else { "missing API key" };
+        let bridge = if self.python_bridge.is_some() { "connected" } else { "not ready" };
+        let scope = self
+            .analysis_scope
+            .clone()
+            .unwrap_or_else(|| "<project root>".to_string());
+        let text = format!(
+            "Environment diagnostics:\n  Project root: {}\n  Analysis scope: {}\n  Python bridge: {}\n  LLM: {}\n  Indexed files: {}\n  Indexed symbols: {}",
+            self.project_root.display(),
+            scope,
+            bridge,
+            llm,
+            self.stats.total_files,
+            self.stats.total_functions
+        );
+        self.push_message(Message::assistant(text));
+    }
+
+    fn lsp_status(&mut self) {
+        let root = self.project_root.clone();
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            let manager = nala_lsp::LspManager::new(&root);
+            let server = manager.server().to_string();
+            let msg = format!("Detected LSP server: {}", server);
+            let _ = tx.send(BackgroundEvent::AssistantChunk(msg)).await;
+            let _ = tx.send(BackgroundEvent::AssistantDone).await;
+        });
+    }
+
+    fn lsp_definition(&mut self, spec: String) {
+        self.run_lsp_lookup(spec, "def");
+    }
+
+    fn lsp_references(&mut self, spec: String) {
+        self.run_lsp_lookup(spec, "refs");
+    }
+
+    fn lsp_hover(&mut self, spec: String) {
+        self.run_lsp_lookup(spec, "hover");
+    }
+
+    fn run_lsp_lookup(&mut self, spec: String, mode: &str) {
+        let Some((file, line, col)) = self.parse_location_spec(&spec) else {
+            self.push_message(Message::error(format!(
+                "Invalid location. Use: /{} <relative/path.ext:line:col>",
+                mode
+            )));
+            return;
+        };
+
+        let root = self.project_root.clone();
+        let tx = self.bg_tx.clone();
+        let mode = mode.to_string();
+        tokio::spawn(async move {
+            let mut manager = nala_lsp::LspManager::new(&root);
+            if let Err(e) = manager.initialize().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                return;
+            }
+
+            let output = match mode.as_str() {
+                "def" => match manager.go_to_definition(&file, line, col).await {
+                    Ok(Some(def)) => format!(
+                        "Definition: {}:{}:{}",
+                        def.file_path.display(),
+                        def.start_line,
+                        def.start_col
+                    ),
+                    Ok(None) => "No definition found.".to_string(),
+                    Err(e) => format!("LSP definition error: {}", e),
+                },
+                "refs" => match manager.find_references(&file, line, col).await {
+                    Ok(refs) if refs.is_empty() => "No references found.".to_string(),
+                    Ok(refs) => {
+                        let mut lines = vec![format!("Found {} references:", refs.len())];
+                        for r in refs.into_iter().take(30) {
+                            lines.push(format!("  - {}:{}:{}", r.file_path.display(), r.line, r.col));
+                        }
+                        lines.join("\n")
+                    }
+                    Err(e) => format!("LSP references error: {}", e),
+                },
+                "hover" => match manager.hover(&file, line, col).await {
+                    Ok(Some(h)) => format!("Hover:\n{}", h.contents),
+                    Ok(None) => "No hover information found.".to_string(),
+                    Err(e) => format!("LSP hover error: {}", e),
+                },
+                _ => "Unsupported LSP mode.".to_string(),
+            };
+
+            let _ = manager.shutdown().await;
+            let _ = tx.send(BackgroundEvent::AssistantChunk(output)).await;
+            let _ = tx.send(BackgroundEvent::AssistantDone).await;
+        });
+    }
+
+    fn parse_location_spec(&self, spec: &str) -> Option<(PathBuf, usize, usize)> {
+        let raw = spec.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let mut parts = raw.rsplitn(3, ':');
+        let col = parts.next()?.parse::<usize>().ok()?;
+        let line = parts.next()?.parse::<usize>().ok()?;
+        let file_part = parts.next()?;
+        let file = self.project_root.join(file_part);
+        if line == 0 || col == 0 {
+            return None;
+        }
+        Some((file, line - 1, col - 1))
+    }
+
     fn team_start(&mut self, objective: String) {
         match &self.python_bridge {
             None => self.push_message(Message::system("AI bridge not ready.")),
@@ -944,8 +1134,10 @@ impl App {
             match nala_indexer::index_project(&root) {
                 Ok(result) => {
                     let _ = tx.send(BackgroundEvent::IndexComplete {
-                        files: result.indexed_files,
+                        indexed_files: result.indexed_files,
+                        total_files: result.scan_result.total_files,
                         symbols: result.total_symbols,
+                        symbol_payload: result.symbols,
                     }).await;
                 }
                 Err(e) => {
@@ -957,14 +1149,35 @@ impl App {
 
     fn handle_background_event(&mut self, event: BackgroundEvent) {
         match event {
-            BackgroundEvent::IndexComplete { files, symbols } => {
+            BackgroundEvent::IndexComplete {
+                indexed_files,
+                total_files,
+                symbols,
+                symbol_payload,
+            } => {
                 self.index_progress = None;
-                self.stats.total_files = files;
-                self.status_text = format!("{} files indexed • {} symbols", files, symbols);
-                if files > 0 {
-                    self.push_message(Message::system(format!(
-                        "Index complete: {} files, {} symbols.", files, symbols
-                    )));
+                self.stats.total_files = total_files;
+                self.stats.total_functions = symbols;
+                self.status_text = format!(
+                    "{} files in project • {} files reindexed • {} symbols",
+                    total_files, indexed_files, symbols
+                );
+                self.push_message(Message::system(format!(
+                    "Index complete: {} files in project, {} files reindexed, {} symbols.",
+                    total_files, indexed_files, symbols
+                )));
+
+                if let Some(bridge) = &self.python_bridge {
+                    let bridge = bridge.clone();
+                    let tx = self.bg_tx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = bridge
+                            .index_context(total_files, symbols, symbol_payload)
+                            .await
+                        {
+                            let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                        }
+                    });
                 }
             }
             BackgroundEvent::IndexError(e) => {
@@ -1000,6 +1213,16 @@ impl App {
                     self.status_text = "AI ready".to_string();
                 } else {
                     self.status_text = "AI offline — add API key to .env".to_string();
+                }
+                if self.stats.total_files > 0 {
+                    if let Some(bridge) = &self.python_bridge {
+                        let bridge = bridge.clone();
+                        let total_files = self.stats.total_files;
+                        let total_symbols = self.stats.total_functions;
+                        tokio::spawn(async move {
+                            let _ = bridge.index_context(total_files, total_symbols, Vec::new()).await;
+                        });
+                    }
                 }
             }
             BackgroundEvent::ProposedAction { action_id, action_type, description, preview } => {

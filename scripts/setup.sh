@@ -23,7 +23,10 @@ ok "Rust $(rustc --version | awk '{print $2}')"
 
 command -v python3 >/dev/null 2>&1 || fail "Python 3 not found. Install Python 3.11+"
 PYTHON_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-[[ "${PYTHON_VER}" < "3.11" ]] && fail "Python 3.11+ required (found ${PYTHON_VER})"
+python3 - <<'PY' || fail "Python 3.11+ required (found ${PYTHON_VER})"
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
 ok "Python ${PYTHON_VER}"
 
 # ── .env setup ─────────────────────────────────────────────────────────────
@@ -47,7 +50,11 @@ ok "Rust workspace built"
 # ── Python venv ────────────────────────────────────────────────────────────
 
 info "Creating Python virtualenv..."
-python3 -m venv .venv
+if [ ! -d ".venv" ]; then
+  python3 -m venv .venv
+else
+  info "Reusing existing .venv"
+fi
 source .venv/bin/activate
 pip install --upgrade pip --quiet
 
@@ -77,5 +84,40 @@ echo "To start Nala:"
 echo "  source .venv/bin/activate"
 echo "  ./rust-core/target/release/nala"
 echo ""
-echo "Or from any directory (after adding to PATH):"
-echo "  nala"
+
+info "Installing global commands (hinala, HiNala, nala)..."
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
+REPO_ROOT="$(pwd)"
+
+cat > "$BIN_DIR/hinala" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+REPO_ROOT="$REPO_ROOT"
+if [ -x "\$REPO_ROOT/rust-core/target/release/hinala" ]; then
+  EXE="\$REPO_ROOT/rust-core/target/release/hinala"
+else
+  EXE="\$REPO_ROOT/rust-core/target/release/nala"
+fi
+if [ ! -x "\$EXE" ]; then
+  echo "HiNala binary not found. Re-run scripts/setup.sh in the Nala repo."
+  exit 1
+fi
+"\$EXE" --path "\$PWD" "\$@"
+EOF
+chmod +x "$BIN_DIR/hinala"
+ln -sf "$BIN_DIR/hinala" "$BIN_DIR/HiNala"
+ln -sf "$BIN_DIR/hinala" "$BIN_DIR/nala"
+
+if ! echo "$PATH" | tr ':' '\n' | grep -Fxq "$BIN_DIR"; then
+  SHELL_RC="$HOME/.bashrc"
+  [ -n "${ZSH_VERSION:-}" ] && SHELL_RC="$HOME/.zshrc"
+  echo "" >> "$SHELL_RC"
+  echo "# HiNala command launcher" >> "$SHELL_RC"
+  echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$SHELL_RC"
+  ok "Added $BIN_DIR to PATH in $SHELL_RC (open a new terminal)."
+else
+  ok "PATH already contains $BIN_DIR."
+fi
+
+ok "Global command installed. Open a new terminal, then run: HiNala"

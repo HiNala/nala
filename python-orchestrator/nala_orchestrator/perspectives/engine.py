@@ -16,14 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .base import BasePerspective, PerspectiveResult
+from .churn import ChurnPerspective
 from .complexity import ComplexityPerspective
 from .dead_code import DeadCodePerspective
 from .dependency import DependencyPerspective
 from .duplication import DuplicationPerspective
+from .performance import PerformancePerspective
 from .security import SecurityPerspective
 from .test_coverage import TestCoveragePerspective
 
@@ -39,8 +40,8 @@ class PerspectivesEngine:
 
     def __init__(
         self,
-        config: "Config",
-        graph: Optional["GraphConnection"] = None,
+        config: Config,
+        graph: GraphConnection | None = None,
     ) -> None:
         self.config = config
         self.graph = graph
@@ -49,8 +50,10 @@ class PerspectivesEngine:
             SecurityPerspective(config, graph),
             DuplicationPerspective(config, graph),
             TestCoveragePerspective(config, graph),
+            ChurnPerspective(config, graph),
             DeadCodePerspective(config, graph),
             DependencyPerspective(config, graph),
+            PerformancePerspective(config, graph),
         ]
 
     # ── Public API ─────────────────────────────────────────────────────────
@@ -66,7 +69,7 @@ class PerspectivesEngine:
 
     async def run_one(
         self, name: str, project_root: str
-    ) -> Optional[PerspectiveResult]:
+    ) -> PerspectiveResult | None:
         """Run a single perspective by name."""
         for p in self._perspectives:
             if p.name == name:

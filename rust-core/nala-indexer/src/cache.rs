@@ -218,7 +218,6 @@ impl<T> OptionalExt<T> for rusqlite::Result<T> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use tempfile::TempDir;
 
     fn make_hashed(path: &str, hash: &str) -> HashedFile {
         HashedFile {
@@ -233,7 +232,7 @@ mod tests {
     #[test]
     fn new_files_are_detected_as_changed() {
         let dir = tempfile::tempdir().unwrap();
-        let mut cache = Cache::open(dir.path()).unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
         let files = vec![make_hashed("src/main.rs", "abc123")];
         let changed = cache.get_changed_files(&files).unwrap();
         assert_eq!(changed.len(), 1);

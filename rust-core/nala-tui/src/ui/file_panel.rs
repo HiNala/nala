@@ -1,7 +1,6 @@
 //! File tree panel (left side, Ctrl+B to toggle).
 //!
-//! Shows the project directory structure with basic health indicators.
-//! In Mission 04 polish, this will be interactive with click-to-open.
+//! Shows a shallow recursive project tree for fast large-repo orientation.
 
 use crate::app::App;
 use ratatui::{
@@ -10,7 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
     Frame, layout::Rect,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
@@ -26,53 +25,79 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
 fn build_tree_items(root: &Path) -> Vec<ListItem<'static>> {
     let mut items = Vec::new();
+    walk_tree(root, root, 0, 3, &mut items, 220);
+    if items.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            " [empty]",
+            Style::default().fg(Color::DarkGray),
+        ))));
+    }
+    items
+}
 
-    let entries = match std::fs::read_dir(root) {
+fn walk_tree(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+    max_depth: usize,
+    items: &mut Vec<ListItem<'static>>,
+    max_items: usize,
+) {
+    if depth > max_depth || items.len() >= max_items {
+        return;
+    }
+    let entries = match std::fs::read_dir(current) {
         Ok(e) => e,
-        Err(_) => return items,
+        Err(_) => return,
     };
-
-    let mut names: Vec<std::path::PathBuf> = entries
+    let mut paths: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             !name.starts_with('.') || name == ".github"
         })
         .collect();
-
-    names.sort_by(|a, b| {
+    paths.sort_by(|a, b| {
         let a_dir = a.is_dir();
         let b_dir = b.is_dir();
         b_dir.cmp(&a_dir).then(a.cmp(b))
     });
 
-    for path in names.iter().take(40) {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
-        let (icon, color) = if path.is_dir() {
-            ("▶ ", Color::Yellow)
+    for path in paths {
+        if items.len() >= max_items {
+            return;
+        }
+        let rel = path
+            .strip_prefix(root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| path.display().to_string());
+        let indent = "  ".repeat(depth);
+        if path.is_dir() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!(" {}[D] {}", indent, rel),
+                Style::default().fg(Color::Yellow),
+            ))));
+            walk_tree(root, &path, depth + 1, max_depth, items, max_items);
         } else {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            (file_icon(ext), file_color(ext))
-        };
-        items.push(ListItem::new(Line::from(Span::styled(
-            format!(" {}{}", icon, name),
-            Style::default().fg(color),
-        ))));
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!(" {}{} {}", indent, file_icon(ext), rel),
+                Style::default().fg(file_color(ext)),
+            ))));
+        }
     }
-
-    items
 }
 
 fn file_icon(ext: &str) -> &'static str {
     match ext {
-        "rs" => "⚙ ",
-        "py" => "🐍",
-        "js" | "ts" | "jsx" | "tsx" => "⬡ ",
-        "go" => "◈ ",
-        "md" => "✎ ",
-        "toml" | "yaml" | "yml" => "⚙ ",
-        "json" => "{ ",
-        _ => "  ",
+        "rs" => "[R]",
+        "py" => "[P]",
+        "js" | "ts" | "jsx" | "tsx" => "[J]",
+        "go" => "[G]",
+        "md" => "[M]",
+        "toml" | "yaml" | "yml" => "[C]",
+        "json" => "[{]",
+        _ => "[F]",
     }
 }
 

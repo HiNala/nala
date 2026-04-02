@@ -30,6 +30,7 @@ pub use symbol_graph::Symbol;
 #[derive(Debug)]
 pub struct ScanResult {
     pub total_files: usize,
+    pub all_files: Vec<HashedFile>,
     pub changed_files: Vec<HashedFile>,
     pub new_files: Vec<HashedFile>,
     pub deleted_count: usize,
@@ -77,6 +78,7 @@ pub fn scan_project(root: &Path) -> Result<ScanResult> {
 
     Ok(ScanResult {
         total_files: hashed.len(),
+        all_files: hashed.clone(),
         changed_files: changed,
         new_files,
         deleted_count: deleted,
@@ -93,18 +95,9 @@ pub fn index_project(root: &Path) -> Result<IndexResult> {
     let scan_result = scan_project(root)?;
 
     let files_to_parse = if scan_result.changed_files.is_empty() {
-        // Nothing changed — load symbols from cache
-        tracing::debug!("No files changed, skipping parse");
-        return Ok(IndexResult {
-            indexed_files: 0,
-            total_symbols: 0,
-            function_count: 0,
-            class_count: 0,
-            import_count: 0,
-            index_duration: start.elapsed(),
-            symbols: Vec::new(),
-            scan_result,
-        });
+        // If users run `scan` then `index`, hashes are already up-to-date.
+        // Fall back to indexing all discovered files so index is never a no-op.
+        scan_result.all_files.clone()
     } else {
         scan_result.changed_files.clone()
     };

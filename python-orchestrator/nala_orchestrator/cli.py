@@ -40,7 +40,8 @@ Full protocol (JSON-lines over stdin/stdout):
             {"id":"A","type":"proposed_action","action_id":"abc","action_type":"edit","description":"…","preview":"…"}
 
   Request:  {"id":"B","type":"apply_action","action_id":"abc"}
-  Response: {"id":"B","type":"action_applied","action_id":"abc","success":true,"message":"Edited src/foo.py"}
+  Response: {"id":"B","type":"action_applied","action_id":"abc",
+             "success":true,"message":"Edited src/foo.py"}
 
   Request:  {"id":"C","type":"skip_action","action_id":"abc"}
   Response: {"id":"C","type":"ok"}
@@ -75,31 +76,30 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
-from .config import Config
-from .agents.orchestrator import AgentOrchestrator
-from .agents.action_extractor import extract_actions
 from .agents.action_executor import ActionExecutor
+from .agents.action_extractor import extract_actions
+from .agents.orchestrator import AgentOrchestrator
+from .chunking.embedder import Embedder
+from .chunking.splitter import ChunkSplitter, Symbol
+from .config import Config
+from .handoff.reader import HandoffReader
+from .handoff.writer import HandoffWriter
+from .memory.knowledge import KnowledgeBase
+from .memory.session_memory import SessionMemory
+from .multi_agent.lead import LeadAgent
 from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
-from .chunking.splitter import ChunkSplitter, Symbol
-from .chunking.embedder import Embedder
-from .memory.session_memory import SessionMemory
-from .memory.knowledge import KnowledgeBase
-from .handoff.writer import HandoffWriter
-from .handoff.reader import HandoffReader
-from .multi_agent.lead import LeadAgent
 
 # Per-process store of proposed actions keyed by action_id.
 # Cleared when a new session starts.
 _pending_actions: dict[str, object] = {}
 
 # Project-level embedder (built lazily on first index_context with symbols).
-_embedder: Optional[Embedder] = None
+_embedder: Embedder | None = None
 
 # Singleton lead agent — created on first team_start, reused for status/cancel.
-_lead_agent: Optional[LeadAgent] = None
+_lead_agent: LeadAgent | None = None
 
 # Flush immediately — Rust reads line-by-line
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
@@ -145,6 +145,12 @@ async def handle_request(
         global _embedder
         symbols_raw: list[dict] = req.get("symbols", [])
         if symbols_raw:
+            normalised_symbols: list[dict] = []
+            for s in symbols_raw:
+                copied = dict(s)
+                copied["kind"] = str(s.get("kind", "")).lower()
+                normalised_symbols.append(copied)
+
             syms = [
                 Symbol(
                     name=s.get("name", ""),
@@ -153,7 +159,7 @@ async def handle_request(
                     end_line=s.get("end_line", 1),
                     file_path=s.get("file_path", ""),
                 )
-                for s in symbols_raw
+                for s in normalised_symbols
             ]
             if _embedder is None or _embedder.needs_rebuild(total_files):
                 _embedder = Embedder(str(root))
@@ -161,6 +167,22 @@ async def handle_request(
                 chunks = splitter.split_all(str(root), syms)
                 _embedder.build(chunks)
                 agent.set_embedder(_embedder)
+
+            # Best-effort graph sync for graph-backed perspectives.
+            try:
+                from .graph.builder import GraphBuilder
+                from .graph.connection import GraphConnection
+
+                conn = GraphConnection(config)
+                if conn.connect():
+                    builder = GraphBuilder(conn)
+                    builder.ensure_schema()
+                    builder.populate_from_index(
+                        json.dumps({"symbols": normalised_symbols}, separators=(",", ":"))
+                    )
+                    conn.close()
+            except Exception:
+                pass
 
         write_response({"id": req_id, "type": "ok"})
 
@@ -182,9 +204,26 @@ async def handle_request(
         project_root_str = req.get("project_root") or str(root)
         perspective_name = req.get("perspective", "all")
         try:
-            engine = PerspectivesEngine(config)
+            graph_conn = None
+            try:
+                from .graph.connection import GraphConnection
+
+                graph_conn = GraphConnection(config)
+                graph_conn.connect()
+            except Exception:
+                graph_conn = None
+
+            engine = PerspectivesEngine(config, graph=graph_conn)
             if perspective_name == "all":
                 results = await engine.run_all(project_root_str)
+            elif perspective_name == "quick":
+                quick_names = ("complexity", "security", "dependency")
+                collected = []
+                for name in quick_names:
+                    one = await engine.run_one(name, project_root_str)
+                    if one:
+                        collected.append(one)
+                results = collected
             else:
                 result = await engine.run_one(perspective_name, project_root_str)
                 results = [result] if result else []
@@ -194,6 +233,8 @@ async def handle_request(
             session.save_findings(results)
 
             _stream_text(req_id, format_results_as_text(results))
+            if graph_conn is not None:
+                graph_conn.close()
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": f"Analysis error: {e}"})
 
@@ -216,7 +257,11 @@ async def handle_request(
             # Save the generated mission to the session
             if full_text:
                 mission_md = "".join(full_text)
-                existing = list(session.current_dir.glob("missions/MISSION_*.md")) if session.current_dir else []
+                existing = (
+                    list(session.current_dir.glob("missions/MISSION_*.md"))
+                    if session.current_dir
+                    else []
+                )
                 n = len(existing) + 1
                 session.write_mission(n, mission_md)
         except Exception as e:
@@ -270,7 +315,13 @@ async def handle_request(
             sm = SessionManager(root)
             meta = sm.load_session(session_id)
             if meta is None:
-                write_response({"id": req_id, "type": "error", "text": f"Session {session_id!r} not found"})
+                write_response(
+                    {
+                        "id": req_id,
+                        "type": "error",
+                        "text": f"Session {session_id!r} not found",
+                    }
+                )
                 return
             agent.context.messages.clear()
             agent.restore_history(sm)
@@ -322,7 +373,13 @@ async def handle_request(
         action_id = req.get("action_id", "")
         action = _pending_actions.get(action_id)
         if action is None:
-            write_response({"id": req_id, "type": "error", "text": f"Unknown action_id: {action_id}"})
+            write_response(
+                {
+                    "id": req_id,
+                    "type": "error",
+                    "text": f"Unknown action_id: {action_id}",
+                }
+            )
             return
         try:
             executor = ActionExecutor(root)
@@ -442,10 +499,13 @@ async def handle_request(
     # ── Graph: stats summary ──────────────────────────────────────────────
     elif req_type == "graph_stats":
         from .graph.connection import GraphConnection
-        from .graph.queries import find_most_imported_modules, find_circular_dependencies
+        from .graph.queries import find_most_imported_modules
         conn = GraphConnection(config)
         if not conn.connect():
-            _stream_text(req_id, "Neo4j is not connected. Run `neo4j start` to enable graph features.")
+            _stream_text(
+                req_id,
+                "Neo4j is not connected. Run `neo4j start` to enable graph features.",
+            )
             return
         try:
             files = conn.run("MATCH (f:File) RETURN count(f) AS n")[0].get("n", 0)
@@ -583,7 +643,7 @@ Rules:
 
 # ── IPC loop ───────────────────────────────────────────────────────────────
 
-async def run_ipc_loop(project_root: Optional[str] = None) -> None:
+async def run_ipc_loop(project_root: str | None = None) -> None:
     """
     Main IPC loop: read JSON-lines from stdin, write responses to stdout.
     Runs until stdin closes (Rust process exits or sends EOF).
@@ -640,8 +700,9 @@ async def run_ipc_loop(project_root: Optional[str] = None) -> None:
             if not line:
                 continue
             req = json.loads(line)
-            # Concurrent dispatch — streaming doesn't block pings
-            asyncio.create_task(handle_request(req, agent, root, config))
+            # Serialize request handling to avoid interleaving streamed JSON-lines
+            # across concurrent tasks, which can corrupt the IPC contract.
+            await handle_request(req, agent, root, config)
         except json.JSONDecodeError as e:
             write_response({"type": "error", "text": f"JSON parse error: {e}"})
         except Exception as e:

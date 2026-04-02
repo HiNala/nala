@@ -17,10 +17,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     // Left: mode + stats
     let stats = if app.stats.total_files > 0 {
-        format!(
+        let base = format!(
             " {} files · {} symbols",
             app.stats.total_files, app.stats.total_functions
-        )
+        );
+        if let Some(p) = app.index_progress {
+            format!("{} · indexing {:>3}%", base, (p * 100.0).round() as usize)
+        } else {
+            base
+        }
     } else {
         app.status_text.clone()
     };

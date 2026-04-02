@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+nala-lsp.workspace     = true
 nala-indexer.workspace = true
 ratatui.workspace      = true
 crossterm              = { version = "0.28", features = ["event-stream"] }

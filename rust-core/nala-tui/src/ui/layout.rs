@@ -60,7 +60,7 @@ fn render_top_bar(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or("unknown");
 
     let line = Line::from(vec![
-        Span::styled(" nala ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" HiNala ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::styled("│ ", Style::default().fg(Color::DarkGray)),
         Span::styled(project_name, Style::default().fg(Color::White)),
         Span::styled("  ", Style::default()),

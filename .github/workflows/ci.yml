@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -45,10 +45,17 @@ jobs:
       - name: Test
         run: cargo test --manifest-path rust-core/Cargo.toml --workspace
 
+      - name: CLI smoke
+        run: cargo run --manifest-path rust-core/Cargo.toml -p nala-cli -- --help
+
   # ── Python ────────────────────────────────────────────────────────────────
   python:
-    name: Python
-    runs-on: ubuntu-latest
+    name: Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -58,13 +65,19 @@ jobs:
           python-version: "3.11"
 
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff pytest
 
       - name: Lint with ruff
         run: ruff check python-orchestrator/nala_orchestrator/
 
       - name: Check formatting
         run: ruff format --check python-orchestrator/nala_orchestrator/
+
+      - name: Install package
+        run: pip install -e python-orchestrator
+
+      - name: Run tests
+        run: pytest -q python-orchestrator/tests
 
   # ── Security audit ────────────────────────────────────────────────────────
   audit:

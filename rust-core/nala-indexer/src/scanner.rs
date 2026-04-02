@@ -135,6 +135,10 @@ impl Scanner {
     /// Returns true if a directory entry should be visited.
     fn should_visit(&self, entry: &walkdir::DirEntry) -> bool {
         if entry.file_type().is_dir() {
+            // The root entry can be "." for relative scans. Never treat it as hidden.
+            if entry.depth() == 0 {
+                return true;
+            }
             let name = entry.file_name().to_string_lossy();
             // Skip excluded directories (including hidden dirs except .github)
             if self.config.excluded_dirs.contains(&name.to_string()) {

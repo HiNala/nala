@@ -16,6 +16,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -54,6 +55,8 @@ app.add_middleware(
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+_default_project_root = os.environ.get("NALA_PROJECT_ROOT", ".")
 
 
 # ── Internal helpers ────────────────────────────────────────────────────────
@@ -115,7 +118,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/graph")
 async def get_graph(
-    project_root: str = Query(".", description="Project root directory"),
+    project_root: str = Query(_default_project_root, description="Project root directory"),
     max_nodes: int = Query(300, ge=10, le=2000),
 ) -> dict[str, Any]:
     """Code graph as D3-compatible {nodes, links, stats}. Falls back to cache."""
@@ -193,7 +196,7 @@ async def get_graph(
 
 @app.get("/complexity")
 async def get_complexity(
-    project_root: str = Query("."),
+    project_root: str = Query(_default_project_root),
     threshold: int = Query(5, ge=1),
     limit: int = Query(100, ge=1, le=1000),
 ) -> list[dict[str, Any]]:
@@ -245,7 +248,7 @@ async def get_complexity(
 
 @app.get("/findings")
 async def get_findings(
-    project_root: str = Query("."),
+    project_root: str = Query(_default_project_root),
     session_id: Optional[str] = Query(None),
 ) -> list[dict[str, Any]]:
     """Findings from the latest (or specified) session, sorted by severity."""
@@ -283,7 +286,7 @@ async def get_findings(
 
 @app.get("/files")
 async def get_files(
-    project_root: str = Query("."),
+    project_root: str = Query(_default_project_root),
     limit: int = Query(500, ge=1, le=5000),
 ) -> list[dict[str, Any]]:
     """File list from SQLite cache, ordered by symbol count desc."""
@@ -311,7 +314,9 @@ async def get_files(
 
 
 @app.get("/sessions")
-async def list_sessions(project_root: str = Query(".")) -> list[dict[str, Any]]:
+async def list_sessions(
+    project_root: str = Query(_default_project_root),
+) -> list[dict[str, Any]]:
     """List all analysis sessions for the project."""
     try:
         from nala_orchestrator.sessions.manager import SessionManager

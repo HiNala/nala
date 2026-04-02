@@ -106,29 +106,41 @@ async fn run_index(path: &std::path::Path) -> Result<()> {
 }
 
 async fn run_dashboard(path: &std::path::Path, port: u16) -> Result<()> {
-    let root_str = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut root_for_env = root_path.to_string_lossy().to_string();
+    #[cfg(windows)]
+    {
+        root_for_env = root_for_env.trim_start_matches(r"\\?\").to_string();
+    }
     println!(
         "Starting Nala dashboard on http://127.0.0.1:{} (project: {})",
         port,
-        root_str.display()
+        root_for_env
     );
     println!("Press Ctrl+C to stop.");
 
-    // Find the dashboard directory (sibling of rust-core)
-    let _exe_dir = std::env::current_exe()
+    // Find the dashboard directory (repo-root/dashboard), anchored from current executable.
+    let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()));
 
-    // Walk up from exe dir to find dashboard/server.py
-    let dashboard_dir = [
-        // repo root relative paths
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(exe_dir) = exe_dir {
+        candidates.push(exe_dir.join("..").join("..").join("..").join("dashboard"));
+    }
+    candidates.extend([
         std::path::PathBuf::from("dashboard"),
         std::path::PathBuf::from("../dashboard"),
         std::path::PathBuf::from("../../dashboard"),
-    ]
-    .into_iter()
-    .find(|p| p.join("server.py").exists())
-    .unwrap_or_else(|| std::path::PathBuf::from("dashboard"));
+    ]);
+    let dashboard_dir = candidates
+        .into_iter()
+        .find(|p| p.join("server.py").exists())
+        .unwrap_or_else(|| std::path::PathBuf::from("dashboard"));
+    let dashboard_cwd = dashboard_dir
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
 
     let status = std::process::Command::new("python")
         .args([
@@ -141,7 +153,8 @@ async fn run_dashboard(path: &std::path::Path, port: u16) -> Result<()> {
             &port.to_string(),
         ])
         .env("DASHBOARD_PORT", port.to_string())
-        .current_dir(dashboard_dir.parent().unwrap_or(&dashboard_dir))
+        .env("NALA_PROJECT_ROOT", root_for_env)
+        .current_dir(dashboard_cwd)
         .status();
 
     match status {

@@ -28,6 +28,8 @@
 use crate::app::BackgroundEvent;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
+use std::env;
+use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -84,6 +86,12 @@ pub enum BridgeRequest {
     HandoffShow,
     /// Show handoff chain history.
     HandoffHistory,
+    /// Update orchestrator-side index context.
+    IndexContext {
+        total_files: usize,
+        total_symbols: usize,
+        symbols: Vec<nala_indexer::Symbol>,
+    },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -255,6 +263,23 @@ impl PythonBridge {
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
+
+    /// Send index context so Python can refresh retrieval and graph state.
+    pub async fn index_context(
+        &self,
+        total_files: usize,
+        total_symbols: usize,
+        symbols: Vec<nala_indexer::Symbol>,
+    ) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::IndexContext {
+                total_files,
+                total_symbols,
+                symbols,
+            })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
 }
 
 // ── spawn ──────────────────────────────────────────────────────────────────
@@ -276,13 +301,7 @@ pub async fn spawn(
     let root_str = root.to_string_lossy().to_string();
 
     // Spawn the subprocess
-    let mut child = Command::new("python")
-        .args(["-m", "nala_orchestrator.cli", "--root", &root_str])
-        .env("PYTHONUNBUFFERED", "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null()) // suppress Python tracebacks in TUI
-        .spawn()
+    let mut child = spawn_python_subprocess(&root_str)
         .context("Failed to spawn Python IPC subprocess. Is nala_orchestrator installed?")?;
 
     let stdin = child
@@ -464,6 +483,17 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "handoff_history",
                             }),
+                            BridgeRequest::IndexContext {
+                                total_files,
+                                total_symbols,
+                                symbols,
+                            } => json!({
+                                "id": id,
+                                "type": "index_context",
+                                "total_files": total_files,
+                                "total_symbols": total_symbols,
+                                "symbols": symbols,
+                            }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
                             let _ = bg_tx.send(BackgroundEvent::AssistantError(
@@ -496,6 +526,88 @@ async fn bridge_task(
     drop(stdin);
     let _ = child.wait().await;
     Ok(())
+}
+
+fn spawn_python_subprocess(root_str: &str) -> Result<Child> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(explicit) = env::var("NALA_PYTHON") {
+        if !explicit.trim().is_empty() {
+            candidates.push(PathBuf::from(explicit));
+        }
+    }
+
+    let root = PathBuf::from(root_str);
+    #[cfg(windows)]
+    {
+        candidates.push(root.join(".venv").join("Scripts").join("python.exe"));
+    }
+    #[cfg(not(windows))]
+    {
+        candidates.push(root.join(".venv").join("bin").join("python"));
+    }
+
+    if let Ok(venv) = env::var("VIRTUAL_ENV") {
+        #[cfg(windows)]
+        {
+            candidates.push(PathBuf::from(&venv).join("Scripts").join("python.exe"));
+        }
+        #[cfg(not(windows))]
+        {
+            candidates.push(PathBuf::from(&venv).join("bin").join("python"));
+        }
+    }
+
+    #[cfg(windows)]
+    let fallback = vec![PathBuf::from("python"), PathBuf::from("py")];
+    #[cfg(not(windows))]
+    let fallback = vec![PathBuf::from("python3"), PathBuf::from("python")];
+    candidates.extend(fallback);
+
+    let mut last_err = None;
+    for python_cmd in candidates {
+        let mut cmd = Command::new(&python_cmd);
+        if python_cmd.file_name().and_then(|s| s.to_str()) == Some("py") {
+            cmd.args(["-3", "-m", "nala_orchestrator.cli", "--root", root_str]);
+        } else {
+            cmd.args(["-m", "nala_orchestrator.cli", "--root", root_str]);
+        }
+        let attempt = cmd
+            .env("PYTHONUNBUFFERED", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(bridge_stderr_stdio(root_str))
+            .spawn();
+        match attempt {
+            Ok(child) => return Ok(child),
+            Err(e) => {
+                last_err = Some((python_cmd, e));
+            }
+        }
+    }
+
+    if let Some((cmd, err)) = last_err {
+        Err(anyhow!(
+            "Failed to launch Python command '{}': {}",
+            cmd.display(),
+            err
+        ))
+    } else {
+        Err(anyhow!("No Python command candidates were available"))
+    }
+}
+
+fn bridge_stderr_stdio(root_str: &str) -> std::process::Stdio {
+    let root = PathBuf::from(root_str);
+    let log_dir = root.join(".nala").join("logs");
+    if fs::create_dir_all(&log_dir).is_err() {
+        return std::process::Stdio::null();
+    }
+    let path = log_dir.join("python-bridge.stderr.log");
+    match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(file) => std::process::Stdio::from(file),
+        Err(_) => std::process::Stdio::null(),
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

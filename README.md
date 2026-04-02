@@ -1,4 +1,4 @@
-# Nala
+# HiNala (Nala)
 
 > Terminal-first AI-powered coding environment. Fast, deep, keyboard-driven.
 
@@ -23,38 +23,34 @@ Nala combines the speed of NeoVim, the intelligence of Cursor, the code-review d
 git clone https://github.com/HiNala/nala.git
 cd nala
 
-# Configure your LLM API key
+# Configure API keys
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY (or OPENAI_API_KEY, GOOGLE_API_KEY)
+# Edit .env and set LLM_PROVIDER + API key
 
-# Build the Rust workspace
-cd rust-core
-cargo build --release
-cd ..
-
-# Set up Python environment
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-
-# Build the PyO3 bridge (Rust → Python)
-cd rust-core/nala-bridge
-maturin develop
-cd ../..
-
-# Install the Python orchestrator
-cd python-orchestrator
-pip install -e .
-cd ..
+# One-command setup + command install
+# Linux/macOS:
+./scripts/setup.sh
+# Windows PowerShell:
+.\scripts\setup.ps1
 ```
 
 ### Run
 
 ```bash
-# From project root, with venv active:
-./rust-core/target/release/nala
+# Open any project folder and launch directly:
+HiNala
 
-# Or with cargo:
-cd rust-core && cargo run -- --path /your/project
+# Compatible aliases:
+hinala
+nala
+```
+
+`HiNala` automatically targets the current working directory as `--path`, so you can use it Claude-Code style from any repo root.
+
+If your system `python` is not the one with `nala_orchestrator` installed, set:
+
+```bash
+NALA_PYTHON=/absolute/path/to/python
 ```
 
 ### Commands inside Nala
