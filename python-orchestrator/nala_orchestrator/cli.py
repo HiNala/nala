@@ -93,6 +93,8 @@ from .memory.session_memory import SessionMemory
 from .multi_agent.lead import LeadAgent
 from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
+from .sessions.missions import MissionDocument, MissionGenerator
+from .sessions.report import AuditReport, Finding, ReportGenerator
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("NALA_DEBUG") else logging.WARNING,
@@ -132,6 +134,80 @@ def _stream_text(req_id: str, text: str, chunk_size: int = 200) -> None:
         write_response({"id": req_id, "type": "chunk", "text": text[offset:end]})
         offset = end
     write_response({"id": req_id, "type": "done"})
+
+
+def _normalise_severity(value: object) -> str:
+    severity = str(value or "medium").lower()
+    if severity in {"critical", "high", "medium", "low"}:
+        return severity
+    return "medium"
+
+
+def _finding_from_dict(data: dict, perspective_name: str) -> Finding:
+    """Reconstruct a report Finding from serialised findings.json data."""
+    start_line = data.get("start_line", 1)
+    try:
+        start_line = int(start_line)
+    except (TypeError, ValueError):
+        start_line = 1
+
+    return Finding(
+        title=str(data.get("title", "Untitled finding")),
+        description=str(data.get("description", "")),
+        file_path=str(data.get("file_path", "")),
+        start_line=max(1, start_line),
+        severity=_normalise_severity(data.get("severity")),
+        perspective=str(data.get("perspective") or perspective_name or "unknown"),
+        suggestion=(str(data["suggestion"]) if data.get("suggestion") else None),
+        code_snippet=(str(data["code_snippet"]) if data.get("code_snippet") else None),
+    )
+
+
+def _audit_report_from_findings(session: SessionManager, findings_raw: list[dict]) -> AuditReport:
+    """Build an AuditReport from the session's saved findings.json payload."""
+    meta = session.current_meta
+    findings: list[Finding] = []
+    perspectives_run: list[str] = []
+    summary_lines: list[str] = []
+
+    for perspective_data in findings_raw:
+        perspective_name = str(perspective_data.get("perspective_name", "unknown"))
+        if perspective_name not in perspectives_run:
+            perspectives_run.append(perspective_name)
+
+        summary = str(perspective_data.get("summary", "")).strip()
+        if summary:
+            summary_lines.append(f"- **{perspective_name}**: {summary}")
+
+        for finding_data in perspective_data.get("findings", []):
+            if isinstance(finding_data, dict):
+                findings.append(_finding_from_dict(finding_data, perspective_name))
+
+    return AuditReport(
+        project_name=meta.project_name if meta else session.project_root.name,
+        session_id=meta.session_id if meta else "unknown",
+        total_files=meta.total_files if meta else 0,
+        total_symbols=meta.total_symbols if meta else 0,
+        findings=findings,
+        perspectives_run=perspectives_run,
+        summary="\n".join(summary_lines),
+    )
+
+
+def _match_mission_focus(mission: MissionDocument, focus: str) -> bool:
+    if not focus:
+        return True
+    needle = focus.lower()
+    haystacks = [
+        mission.title,
+        mission.objective,
+        mission.context,
+        *(f.title for f in mission.findings),
+        *(f.description for f in mission.findings),
+        *(f.file_path for f in mission.findings),
+        *(f.perspective for f in mission.findings),
+    ]
+    return any(needle in text.lower() for text in haystacks if text)
 
 
 # ── Request handlers ───────────────────────────────────────────────────────
@@ -265,7 +341,19 @@ async def handle_request(
 
             session = agent.ensure_session()
             session.save_findings(results)
-            _stream_text(req_id, format_results_as_text(results))
+            findings_raw = session.load_findings_raw()
+            audit_report = _audit_report_from_findings(session, findings_raw)
+            report_md = ReportGenerator().generate(audit_report)
+            report_path = session.write_report("report", report_md)
+            try:
+                report_rel = report_path.relative_to(root)
+                report_label = str(report_rel)
+            except ValueError:
+                report_label = str(report_path)
+
+            rendered = format_results_as_text(results)
+            rendered += f"\n\nSaved audit report: {report_label}"
+            _stream_text(req_id, rendered)
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": f"Analysis error: {e}"})
         finally:
@@ -278,6 +366,41 @@ async def handle_request(
         try:
             session = agent.ensure_session()
             findings_raw = session.load_findings_raw()
+            if not findings_raw:
+                write_response({
+                    "id": req_id,
+                    "type": "error",
+                    "text": "No findings available yet. Run /analyze before generating a mission.",
+                })
+                return
+
+            audit_report = _audit_report_from_findings(session, findings_raw)
+
+            if not config.has_llm():
+                generator = MissionGenerator()
+                missions = generator.generate_all(audit_report)
+                missions = [m for m in missions if _match_mission_focus(m, focus)]
+                if not missions:
+                    write_response({
+                        "id": req_id,
+                        "type": "error",
+                        "text": (
+                            f"No generated mission matched focus '{focus}'."
+                            if focus else
+                            "No mission could be generated from the current findings."
+                        ),
+                    })
+                    return
+
+                mission_md = generator.render(missions[0])
+                _stream_text(req_id, mission_md)
+                existing = (
+                    list(session.current_dir.glob("missions/MISSION_*.md"))
+                    if session.current_dir
+                    else []
+                )
+                session.write_mission(len(existing) + 1, mission_md)
+                return
 
             # Build the prompt from saved findings
             prompt = _build_mission_prompt(findings_raw, focus, agent)

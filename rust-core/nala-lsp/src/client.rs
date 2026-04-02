@@ -18,7 +18,7 @@ use crate::diagnostics::DiagnosticsStore;
 use crate::transport::{LspTransport, NotificationCallback};
 use anyhow::Result;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -54,8 +54,13 @@ struct LspManagerInner {
     server: LspServer,
     transport: Option<LspTransport>,
     initialized: bool,
-    opened_files: HashSet<PathBuf>,
+    opened_files: HashMap<PathBuf, OpenDocumentState>,
     diagnostics: DiagnosticsStore,
+}
+
+struct OpenDocumentState {
+    version: i32,
+    text: String,
 }
 
 impl LspHandle {
@@ -68,7 +73,7 @@ impl LspHandle {
                 server,
                 transport: None,
                 initialized: false,
-                opened_files: HashSet::new(),
+                opened_files: HashMap::new(),
                 diagnostics,
             })),
         }
@@ -173,24 +178,50 @@ impl LspHandle {
     }
 
     async fn ensure_file_open(&self, file: &Path) -> Result<()> {
-        let mut inner = self.inner.lock().await;
         let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+        let text = tokio::fs::read_to_string(&canonical)
+            .await
+            .unwrap_or_default();
+        let lang_id = detect_language_id(&canonical);
+        let uri = path_to_uri(&canonical);
 
-        if inner.opened_files.contains(&canonical) {
-            return Ok(());
-        }
-
+        let mut inner = self.inner.lock().await;
         if let Some(ref transport) = inner.transport {
-            let text = tokio::fs::read_to_string(&canonical)
-                .await
-                .unwrap_or_default();
-            let lang_id = detect_language_id(&canonical);
+            if let Some((version, is_unchanged)) = inner
+                .opened_files
+                .get(&canonical)
+                .map(|doc| (doc.version, doc.text == text))
+            {
+                if !is_unchanged {
+                    let next_version = version + 1;
+                    transport
+                        .notify(
+                            "textDocument/didChange",
+                            json!({
+                                "textDocument": {
+                                    "uri": uri.clone(),
+                                    "version": next_version,
+                                },
+                                "contentChanges": [
+                                    { "text": text.clone() }
+                                ],
+                            }),
+                        )
+                        .await?;
+                    if let Some(doc) = inner.opened_files.get_mut(&canonical) {
+                        doc.version = next_version;
+                        doc.text = text;
+                    }
+                }
+                return Ok(());
+            }
+
             transport
                 .notify(
                     "textDocument/didOpen",
                     json!({
                         "textDocument": {
-                            "uri": path_to_uri(&canonical),
+                            "uri": uri,
                             "languageId": lang_id,
                             "version": 1,
                             "text": text,
@@ -198,7 +229,13 @@ impl LspHandle {
                     }),
                 )
                 .await?;
-            inner.opened_files.insert(canonical);
+            inner.opened_files.insert(
+                canonical,
+                OpenDocumentState {
+                    version: 1,
+                    text,
+                },
+            );
         }
 
         Ok(())

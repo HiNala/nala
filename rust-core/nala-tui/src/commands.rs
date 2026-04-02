@@ -398,17 +398,16 @@ impl App {
     fn generate_mission(&mut self, focus: String) {
         match &self.python_bridge {
             None => self.push_message(Message::system("AI bridge not ready.")),
-            Some(_) if !self.llm_available => {
-                self.push_message(Message::system(
-                    "No LLM configured — cannot generate mission. Add an API key to .env.",
-                ));
-            }
             Some(bridge) => {
                 let bridge = bridge.clone();
                 let tx = self.bg_tx.clone();
                 self.mode = AppMode::Analyzing;
                 let label = if focus.is_empty() {
-                    "Generating mission document...".to_string()
+                    if self.llm_available {
+                        "Generating mission document...".to_string()
+                    } else {
+                        "Generating mission document from saved findings...".to_string()
+                    }
                 } else {
                     format!("Generating mission focused on: {}...", focus)
                 };
