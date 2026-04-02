@@ -107,7 +107,11 @@ pub enum BackgroundEvent {
     AssistantChunk(String),
     AssistantDone,
     AssistantError(String),
-    BridgeReady { has_llm: bool },
+    BridgeReady {
+        has_llm: bool,
+        provider: String,
+        model: String,
+    },
     ProposedAction {
         action_id: String,
         action_type: String,
@@ -147,6 +151,8 @@ pub struct App {
     pub streaming_response: Option<String>,
     pub python_bridge: Option<PythonBridge>,
     pub llm_available: bool,
+    pub llm_provider: String,
+    pub llm_model: String,
     pub pending_actions: Vec<PendingAction>,
     pub apply_all: bool,
     pub analysis_scope: Option<String>,
@@ -190,6 +196,8 @@ impl App {
             streaming_response: None,
             python_bridge: None,
             llm_available: false,
+            llm_provider: String::new(),
+            llm_model: String::new(),
             pending_actions: Vec::new(),
             apply_all: false,
             analysis_scope: None,
@@ -534,8 +542,10 @@ impl App {
                     "AI request failed: {}. Check your API key in .env and try again.", e
                 )));
             }
-            BackgroundEvent::BridgeReady { has_llm } => {
+            BackgroundEvent::BridgeReady { has_llm, provider, model } => {
                 self.llm_available = has_llm;
+                self.llm_provider = provider;
+                self.llm_model = model;
                 if has_llm {
                     self.status_text = "AI ready".to_string();
                 } else {

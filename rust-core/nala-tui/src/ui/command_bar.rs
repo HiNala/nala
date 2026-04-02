@@ -1,12 +1,12 @@
-//! Command input line.
+//! Command input area.
 //!
-//! Simple `> ` prompt like Claude Code / Gemini CLI.
-//! No box, no border -- just a prompt and the user's text.
+//! Two lines: a thin horizontal separator, then the `> ` prompt.
+//! Clean, professional feel inspired by Claude Code / Gemini CLI.
 
 use crate::app::{self, App};
 use crate::ui::theme;
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -14,6 +14,18 @@ use ratatui::{
 };
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(area);
+
+    let sep_char = "─".repeat(area.width as usize);
+    let separator = Line::from(Span::styled(
+        sep_char,
+        Style::default().fg(theme::DARK_GRAY),
+    ));
+    frame.render_widget(Paragraph::new(separator), rows[0]);
+
     let is_slash = app.input.starts_with('/');
 
     let input_style = if is_slash {
@@ -24,7 +36,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let content = if app.input.is_empty() {
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " > ",
+                Style::default()
+                    .fg(theme::CYAN)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 "Type a question or /help for commands",
                 Style::default().fg(theme::DARK_GRAY),
@@ -32,7 +49,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         ])
     } else {
         let mut spans = vec![
-            Span::styled("> ", Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " > ",
+                Style::default()
+                    .fg(theme::CYAN)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(&app.input[..], input_style),
         ];
 
@@ -44,5 +66,5 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(spans)
     };
 
-    frame.render_widget(Paragraph::new(content), area);
+    frame.render_widget(Paragraph::new(content), rows[1]);
 }

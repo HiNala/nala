@@ -1,5 +1,6 @@
-//! Status bar -- single line at the very bottom.
-//! Minimal: mode indicator, stats, key hints. Terminal-native colors.
+//! Status bar — single line at the very bottom.
+//! Shows: mode | stats or status | model info | shortcuts
+//! Inspired by Claude Code's bottom bar with mode + model display.
 
 use crate::app::{App, AppMode};
 use crate::ui::theme;
@@ -16,7 +17,7 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Fill(1), Constraint::Min(32)])
+        .constraints([Constraint::Fill(1), Constraint::Min(40)])
         .split(area);
 
     let mode_color = match app.mode {
@@ -28,7 +29,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut left_spans: Vec<Span> = vec![Span::styled(
         format!(" {} ", app.mode),
-        Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(mode_color)
+            .add_modifier(Modifier::BOLD),
     )];
 
     if app.mode == AppMode::Analyzing {
@@ -41,7 +44,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     if app.stats.total_files > 0 {
         left_spans.push(Span::styled(
-            format!("· {} files · {} symbols", app.stats.total_files, app.stats.total_functions),
+            format!(
+                "· {} files · {} symbols",
+                app.stats.total_files, app.stats.total_functions
+            ),
             Style::default().fg(theme::DARK_GRAY),
         ));
     } else {
@@ -53,14 +59,28 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(Paragraph::new(Line::from(left_spans)), cols[0]);
 
-    let hints = Line::from(vec![
-        Span::styled("^B", Style::default().fg(theme::DARK_GRAY)),
-        Span::styled(" files  ", Style::default().fg(theme::DARK_GRAY)),
-        Span::styled("^E", Style::default().fg(theme::DARK_GRAY)),
-        Span::styled(" sessions  ", Style::default().fg(theme::DARK_GRAY)),
-        Span::styled("/help", Style::default().fg(theme::CYAN)),
-        Span::styled(" ", Style::default()),
-    ]);
+    let mut right_spans: Vec<Span> = Vec::new();
 
-    frame.render_widget(Paragraph::new(hints), cols[1]);
+    if !app.llm_model.is_empty() {
+        right_spans.push(Span::styled(
+            app.llm_model.clone(),
+            Style::default().fg(theme::GRAY),
+        ));
+        right_spans.push(Span::styled(
+            "  · ",
+            Style::default().fg(theme::DARK_GRAY),
+        ));
+    }
+
+    right_spans.push(Span::styled(
+        "/help",
+        Style::default().fg(theme::CYAN),
+    ));
+    right_spans.push(Span::styled(" ", Style::default()));
+
+    let hints = Line::from(right_spans);
+    frame.render_widget(
+        Paragraph::new(hints).alignment(ratatui::layout::Alignment::Right),
+        cols[1],
+    );
 }

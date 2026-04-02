@@ -7,6 +7,7 @@
 //!   │  MESSAGE LOG  (scrollable)           │
 //!   │  (optional side panels)              │
 //!   ├──────────────────────────────────────┤
+//!   │  ─── separator ───                   │
 //!   │  > prompt input                      │
 //!   ├──────────────────────────────────────┤
 //!   │  status bar                          │
@@ -18,20 +19,18 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    frame.render_widget(Block::default().style(Style::reset()), area);
-
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(1),
+            Constraint::Length(2),
             Constraint::Length(1),
         ])
         .split(area);
@@ -70,7 +69,18 @@ fn render_body(frame: &mut Frame, app: &App, area: Rect) {
         file_panel::render(frame, app, cols[col_idx]);
         col_idx += 1;
     }
-    render_messages(frame, app, cols[col_idx]);
+
+    let main_area = cols[col_idx];
+    let has_conversation = app.messages.iter().any(|m| {
+        matches!(m.kind, MessageKind::User | MessageKind::Assistant)
+    }) || app.streaming_response.is_some();
+
+    if has_conversation {
+        render_messages(frame, app, main_area);
+    } else {
+        splash::render(frame, app, main_area);
+    }
+
     col_idx += 1;
     if right_open {
         session_panel::render(frame, app, cols[col_idx]);
@@ -80,47 +90,38 @@ fn render_body(frame: &mut Frame, app: &App, area: Rect) {
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
-    if app.messages.is_empty() && app.streaming_response.is_none() {
-        let welcome = splash::welcome_lines(
-            app.project_root.file_name().and_then(|n| n.to_str()).unwrap_or("project"),
-            env!("CARGO_PKG_VERSION"),
-            detect_git_branch(&app.project_root).as_deref(),
-        );
-        lines.extend(welcome);
-    }
-
     for msg in &app.messages {
         match msg.kind {
             MessageKind::User => {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("> ", Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "  > ",
+                        Style::default()
+                            .fg(theme::CYAN)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(
                         msg.text.lines().next().unwrap_or(""),
-                        Style::default().fg(theme::WHITE).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme::WHITE)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]));
                 for text_line in msg.text.lines().skip(1) {
                     lines.push(Line::from(Span::styled(
-                        format!("  {}", text_line),
+                        format!("    {}", text_line),
                         Style::default().fg(theme::WHITE),
                     )));
                 }
             }
             MessageKind::Assistant => {
                 lines.push(Line::from(""));
-                for (i, text_line) in msg.text.lines().enumerate() {
-                    if i == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled("  ", Style::default()),
-                            Span::styled(text_line, Style::default().fg(theme::CYAN)),
-                        ]));
-                    } else {
-                        lines.push(Line::from(Span::styled(
-                            format!("  {}", text_line),
-                            Style::default().fg(theme::CYAN),
-                        )));
-                    }
+                for text_line in msg.text.lines() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", text_line),
+                        Style::default().fg(theme::CYAN),
+                    )));
                 }
             }
             MessageKind::System => {
@@ -137,7 +138,12 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             }
             MessageKind::Error => {
                 lines.push(Line::from(vec![
-                    Span::styled("  error: ", Style::default().fg(theme::RED).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "  error: ",
+                        Style::default()
+                            .fg(theme::RED)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(
                         msg.text.lines().next().unwrap_or(""),
                         Style::default().fg(theme::RED),
@@ -183,20 +189,17 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
     if offset > 0 {
         let hint = Line::from(Span::styled(
-            format!("  -- {} more lines (PgUp to scroll) --", offset),
+            format!("  ── {} more lines (PgUp to scroll) ──", offset),
             Style::default().fg(theme::DARK_GRAY),
         ));
-        frame.render_widget(Paragraph::new(hint), Rect { x: area.x, y: area.y, width: area.width, height: 1 });
-    }
-}
-
-fn detect_git_branch(root: &std::path::Path) -> Option<String> {
-    let head = root.join(".git").join("HEAD");
-    let contents = std::fs::read_to_string(head).ok()?;
-    let trimmed = contents.trim();
-    if let Some(rest) = trimmed.strip_prefix("ref: refs/heads/") {
-        Some(rest.to_string())
-    } else {
-        Some(trimmed[..8.min(trimmed.len())].to_string())
+        frame.render_widget(
+            Paragraph::new(hint),
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            },
+        );
     }
 }

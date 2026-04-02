@@ -706,6 +706,7 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
         "type": "ready",
         "has_llm": config.has_llm(),
         "provider": config.llm_provider,
+        "model": config.active_model(),
         "version": VERSION,
     })
 

@@ -314,7 +314,7 @@ pub async fn spawn(
         .ok_or_else(|| anyhow!("Failed to take subprocess stdout"))?;
 
     // Wait for the "ready" message before accepting queries
-    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<bool>>();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<(bool, String, String)>>();
 
     // bg_tx_task goes into the spawned task; bg_tx_notify stays here for after ready
     let bg_tx_task = bg_tx.clone();
@@ -330,16 +330,14 @@ pub async fn spawn(
         }
     });
 
-    // Block until the subprocess signals ready (or fails)
-    let has_llm = match ready_rx.await {
+    let (has_llm, provider, model) = match ready_rx.await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return Err(e),
         Err(_) => return Err(anyhow!("Python bridge task exited before signalling ready")),
     };
 
-    // Notify the UI that the bridge is up
     let _ = bg_tx_notify
-        .send(BackgroundEvent::BridgeReady { has_llm })
+        .send(BackgroundEvent::BridgeReady { has_llm, provider, model })
         .await;
 
     Ok(PythonBridge { request_tx: query_tx })
@@ -354,12 +352,12 @@ async fn bridge_task(
     stdout: ChildStdout,
     mut query_rx: mpsc::Receiver<BridgeRequest>,
     bg_tx: mpsc::Sender<BackgroundEvent>,
-    ready_tx: tokio::sync::oneshot::Sender<Result<bool>>,
+    ready_tx: tokio::sync::oneshot::Sender<Result<(bool, String, String)>>,
 ) -> Result<()> {
     let mut reader = BufReader::new(stdout).lines();
 
     // ── Wait for "ready" ───────────────────────────────────────────────────
-    let has_llm = loop {
+    let ready_info = loop {
         match reader.next_line().await {
             Ok(Some(line)) => {
                 if let Ok(msg) = serde_json::from_str::<Value>(&line) {
@@ -368,7 +366,17 @@ async fn bridge_task(
                             .get("has_llm")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        break has_llm;
+                        let provider = msg
+                            .get("provider")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let model = msg
+                            .get("model")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        break (has_llm, provider, model);
                     }
                 }
             }
@@ -382,7 +390,7 @@ async fn bridge_task(
             }
         }
     };
-    let _ = ready_tx.send(Ok(has_llm));
+    let _ = ready_tx.send(Ok(ready_info));
 
     // ── Main dispatch loop ─────────────────────────────────────────────────
     loop {
