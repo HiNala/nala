@@ -157,7 +157,7 @@ impl App {
             "  /doctor                — environment and readiness diagnostics\n",
             "  /clear                 — clear message log\n",
             "  /help                  — show this help\n",
-            "  /quit                  — exit\n\n",
+            "  /quit | /exit          — exit\n\n",
             "Or just type a question to ask the AI.",
         )));
     }
@@ -388,7 +388,7 @@ impl App {
             }
             _ => {
                 self.push_message(Message::error(format!(
-                    "Unknown session subcommand: '{}'. Use: new, load <id>, summary.",
+                    "Unknown session subcommand: '{}'. Use: list, new, load <id>, summary.",
                     sub[0]
                 )));
             }
@@ -441,7 +441,7 @@ impl App {
     }
 
     pub(crate) fn doctor(&mut self) {
-        let llm = if self.llm_available {
+        let llm_status = if self.llm_available {
             "ready"
         } else {
             "missing API key"
@@ -455,12 +455,38 @@ impl App {
             .analysis_scope
             .clone()
             .unwrap_or_else(|| "<project root>".to_string());
+        let lsp_status = if self.lsp_initialized {
+            if self.lsp_server_name.is_empty() {
+                "running".to_string()
+            } else {
+                format!("running ({})", self.lsp_server_name)
+            }
+        } else if self.lsp_handle.is_some() {
+            "initializing...".to_string()
+        } else {
+            "not started (run /index)".to_string()
+        };
+        let provider_str = if self.llm_provider.is_empty() {
+            "none".to_string()
+        } else {
+            format!("{} / {}", self.llm_provider, self.llm_model)
+        };
         let text = format!(
-            "Environment diagnostics:\n  Project root: {}\n  Analysis scope: {}\n  Python bridge: {}\n  LLM: {}\n  Indexed files: {}\n  Indexed symbols: {}",
+            "Environment diagnostics:\n\
+             \x20 Project root:    {}\n\
+             \x20 Analysis scope:  {}\n\
+             \x20 Python bridge:   {}\n\
+             \x20 LLM provider:    {}\n\
+             \x20 LLM status:      {}\n\
+             \x20 LSP:             {}\n\
+             \x20 Indexed files:   {}\n\
+             \x20 Indexed symbols: {}",
             self.project_root.display(),
             scope,
             bridge,
-            llm,
+            provider_str,
+            llm_status,
+            lsp_status,
             self.stats.total_files,
             self.stats.total_functions
         );

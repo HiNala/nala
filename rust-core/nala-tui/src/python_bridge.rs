@@ -780,7 +780,32 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
             let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
             let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
         }
-        // "pong", "ok", "ready" — informational, no UI event needed
+        "memory_sessions" => {
+            let sessions = msg.get("sessions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let text = if sessions.is_empty() {
+                "No memory sessions found.".to_string()
+            } else {
+                let mut lines = vec![format!("Memory sessions ({}):", sessions.len())];
+                for s in &sessions {
+                    let id = s.get("session_id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let summary = s.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+                    lines.push(format!("  • {} — {}", id, summary));
+                }
+                lines.join("\n")
+            };
+            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        "ok" => {
+            let text = msg
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("Done.")
+                .to_string();
+            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
+            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+        }
+        // "pong", "ready" — informational, no UI event needed
         _ => {}
     }
 }

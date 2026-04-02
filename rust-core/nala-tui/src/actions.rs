@@ -50,6 +50,7 @@ impl App {
             return;
         };
         let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::error("Bridge not available — skipping all."));
             self.pending_actions.clear();
             self.mode = AppMode::Ready;
             return;

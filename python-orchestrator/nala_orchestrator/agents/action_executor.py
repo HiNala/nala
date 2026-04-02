@@ -105,13 +105,24 @@ class ActionExecutor:
     # ── Apply helpers ──────────────────────────────────────────────────────
 
     def _resolve(self, file_path: str) -> Path:
+        """Resolve a file path and verify it's inside the project root."""
         p = Path(file_path)
         if not p.is_absolute():
             p = self.root / p
-        return p.resolve()
+        resolved = p.resolve()
+        try:
+            resolved.relative_to(self.root)
+        except ValueError as exc:
+            raise PermissionError(
+                f"Path escapes project root: {file_path}"
+            ) from exc
+        return resolved
 
     def _apply_edit(self, action: EditAction) -> ActionResult:
-        path = self._resolve(action.file_path)
+        try:
+            path = self._resolve(action.file_path)
+        except PermissionError as exc:
+            return ActionResult(action.action_id, False, str(exc))
         if not path.exists():
             return ActionResult(action.action_id, False, f"File not found: {action.file_path}")
         try:
@@ -131,7 +142,10 @@ class ActionExecutor:
         return ActionResult(action.action_id, True, f"Edited {action.file_path}")
 
     def _apply_create(self, action: CreateAction) -> ActionResult:
-        path = self._resolve(action.file_path)
+        try:
+            path = self._resolve(action.file_path)
+        except PermissionError as exc:
+            return ActionResult(action.action_id, False, str(exc))
         if path.exists():
             return ActionResult(
                 action.action_id, False,
@@ -145,7 +159,10 @@ class ActionExecutor:
         return ActionResult(action.action_id, True, f"Created {action.file_path}")
 
     def _apply_delete(self, action: DeleteAction) -> ActionResult:
-        path = self._resolve(action.file_path)
+        try:
+            path = self._resolve(action.file_path)
+        except PermissionError as exc:
+            return ActionResult(action.action_id, False, str(exc))
         if not path.exists():
             return ActionResult(action.action_id, False, f"File not found: {action.file_path}")
         try:

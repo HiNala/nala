@@ -266,10 +266,17 @@ class AgentOrchestrator:
             )
             self.compact_now()
 
-    def update_index_context(self, total_files: int, total_symbols: int) -> None:
+    def update_index_context(
+        self,
+        total_files: int,
+        total_symbols: int,
+        primary_language: str = "",
+    ) -> None:
         """Update the context with fresh index data."""
         self.context.total_files = total_files
         self.context.total_symbols = total_symbols
+        if primary_language:
+            self.context.primary_language = primary_language
         if self._session:
             self._session.update_meta(
                 total_files=total_files,
@@ -324,6 +331,8 @@ class AgentOrchestrator:
             return
 
         session = self.ensure_session()
+        self._detector.mark_user_message()
+        self._maybe_compact(user_message)
         self.context.add_user(user_message)
         self.context.trim_to_limit()
         session.append_turn("user", user_message)
@@ -349,6 +358,9 @@ class AgentOrchestrator:
             self.context.add_assistant(assembled)
             turn_type = "assistant_error" if had_error else "assistant"
             session.append_turn(turn_type, assembled)
+            self._detector.mark_assistant_response()
+            history = [{"role": m.role, "content": m.content} for m in self.context.messages]
+            self._bg_summary.on_turn(history)
 
     async def stream_query(self, user_message: str) -> AsyncIterator[str]:
         """Stream a response token by token."""
@@ -362,6 +374,8 @@ class AgentOrchestrator:
             return
 
         session = self.ensure_session()
+        self._detector.mark_user_message()
+        self._maybe_compact(user_message)
         self.context.add_user(user_message)
         self.context.trim_to_limit()
         session.append_turn("user", user_message)
@@ -386,3 +400,6 @@ class AgentOrchestrator:
             self.context.add_assistant(assembled)
             turn_type = "assistant_error" if had_error else "assistant"
             session.append_turn(turn_type, assembled)
+            self._detector.mark_assistant_response()
+            history = [{"role": m.role, "content": m.content} for m in self.context.messages]
+            self._bg_summary.on_turn(history)

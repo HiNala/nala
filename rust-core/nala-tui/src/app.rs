@@ -25,7 +25,6 @@ use nala_lsp::DiagnosticsStore;
 pub enum AppMode {
     Booting,
     Ready,
-    Command,
     Analyzing,
     Viewing,
     Confirming,
@@ -36,7 +35,6 @@ impl std::fmt::Display for AppMode {
         match self {
             Self::Booting => write!(f, "BOOTING"),
             Self::Ready => write!(f, "READY"),
-            Self::Command => write!(f, "COMMAND"),
             Self::Analyzing => write!(f, "ANALYZING"),
             Self::Viewing => write!(f, "VIEWING"),
             Self::Confirming => write!(f, "CONFIRM"),
@@ -164,6 +162,7 @@ pub struct App {
     pub apply_all: bool,
     pub analysis_scope: Option<String>,
     pub lsp_initialized: bool,
+    pub lsp_server_name: String,
     pub lsp_handle: Option<nala_lsp::LspHandle>,
     pub diagnostics_store: DiagnosticsStore,
     pub scroll_offset: usize,
@@ -210,6 +209,7 @@ impl App {
             apply_all: false,
             analysis_scope: None,
             lsp_initialized: false,
+            lsp_server_name: String::new(),
             lsp_handle: None,
             diagnostics_store: DiagnosticsStore::new(),
             scroll_offset: 0,
@@ -663,6 +663,7 @@ impl App {
             }
             BackgroundEvent::LspStarted { server_name } => {
                 self.lsp_initialized = true;
+                self.lsp_server_name = server_name.clone();
                 self.push_message(Message::system(format!(
                     "LSP: {} started (diagnostics active)",
                     server_name

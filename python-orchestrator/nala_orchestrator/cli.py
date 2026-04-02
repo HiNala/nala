@@ -154,7 +154,25 @@ async def handle_request(
     elif req_type == "index_context":
         total_files = req.get("total_files", 0)
         total_symbols = req.get("total_symbols", 0)
-        agent.update_index_context(total_files=total_files, total_symbols=total_symbols)
+
+        # Derive primary language from symbol frequency.
+        symbols_raw_all: list[dict] = req.get("symbols", [])
+        lang_counts: dict[str, int] = {}
+        for s in symbols_raw_all:
+            lang = s.get("language", "")
+            if lang:
+                lang_counts[lang] = lang_counts.get(lang, 0) + 1
+        primary_lang = (
+            max(lang_counts, key=lang_counts.get, default="unknown")  # type: ignore[arg-type]
+            if lang_counts
+            else "unknown"
+        )
+
+        agent.update_index_context(
+            total_files=total_files,
+            total_symbols=total_symbols,
+            primary_language=primary_lang,
+        )
 
         # Rebuild chunk index if stale.
         global _embedder
@@ -474,14 +492,14 @@ async def handle_request(
 
     # ── Memory: forget a topic ─────────────────────────────────────────────
     elif req_type == "memory_forget":
-        topic = req.get("topic", "").strip()
-        if not topic:
-            write_response({"id": req_id, "type": "error", "text": "Missing topic"})
+        target = req.get("target", "").strip()
+        if not target:
+            write_response({"id": req_id, "type": "error", "text": "Missing target"})
         else:
             kb = KnowledgeBase(root)
-            count = kb.remove_fact(topic)
+            count = kb.remove_fact(target)
             write_response({"id": req_id, "type": "ok",
-                            "text": f"Removed {count} fact(s) matching '{topic}'"})
+                            "text": f"Removed {count} fact(s) matching '{target}'"})
 
     # ── Context: usage breakdown ──────────────────────────────────────────
     elif req_type == "context_usage":

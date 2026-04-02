@@ -40,6 +40,13 @@ class SessionMeta:
     perspectives_run: list[str] = field(default_factory=list)
     status: str = "in_progress"  # "in_progress" | "complete" | "error"
 
+    @classmethod
+    def from_dict(cls, data: dict) -> SessionMeta:
+        """Create from dict, ignoring unknown keys for forward compatibility."""
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in known}
+        return cls(**filtered)
+
 
 class SessionManager:
     """Creates and manages Nala analysis sessions."""
@@ -82,7 +89,7 @@ class SessionManager:
             return None
         data = json.loads(meta_path.read_text())
         self._current = session_dir
-        self._meta = SessionMeta(**data)
+        self._meta = SessionMeta.from_dict(data)
         return self._meta
 
     # ── Write ──────────────────────────────────────────────────────────────
@@ -237,7 +244,7 @@ class SessionManager:
             if meta_path.exists():
                 try:
                     data = json.loads(meta_path.read_text())
-                    sessions.append(SessionMeta(**data))
+                    sessions.append(SessionMeta.from_dict(data))
                 except Exception:
                     continue
         return sessions

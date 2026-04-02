@@ -21,7 +21,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     let mode_color = match app.mode {
-        AppMode::Ready | AppMode::Command => theme::GREEN,
+        AppMode::Ready => theme::GREEN,
         AppMode::Analyzing => theme::YELLOW,
         AppMode::Confirming => theme::YELLOW,
         _ => theme::CYAN,
