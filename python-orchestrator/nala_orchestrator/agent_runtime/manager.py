@@ -16,7 +16,18 @@ from ..models.router import ModelRouter
 from ..models.types import TaskType
 from ..research.service import ResearchService
 from ..skills.registry import SkillRegistry
-from .state import AgentPhase, AgentPlan, AgentRun, AutonomyLevel, load_run, save_run
+from .executor import MissionExecutor
+from .mission_writer import MissionWriter
+from .state import (
+    AgentPhase,
+    AgentPlan,
+    AgentRun,
+    AutonomyLevel,
+    MissionFile,
+    MissionStatus,
+    load_run,
+    save_run,
+)
 from .toolbox import Toolbox
 from .workers import WorkerRegistry, WorkerRole, WorkerStatus
 
@@ -69,6 +80,9 @@ class AgentManager:
 
         self._checkpoints: list[dict] = []
         self._pending_choices: list[str] = []
+        self._pending_missions: list[MissionFile] | None = None
+        self._pending_writer: MissionWriter | None = None
+        self._original_branch: str = "main"
         run_id = self._run.run_id if self._run else ""
         self._workers = WorkerRegistry(run_id)
         if self._run and self._run.workers:
@@ -441,6 +455,256 @@ class AgentManager:
         if self._run:
             self._transition(AgentPhase.REVIEWING)
 
+    # ── Orchestration: mission-driven execution (P7-02) ─────────────
+
+    async def start_objective(
+        self, objective: str, autonomy: str = "autonomous"
+    ) -> AsyncIterator[str]:
+        """Full orchestration loop: research → plan → approve → execute.
+
+        Yields streaming progress text for the TUI.
+        """
+        run = self.start(objective)
+        try:
+            run.autonomy = AutonomyLevel(autonomy)
+        except ValueError:
+            run.autonomy = AutonomyLevel.AUTONOMOUS
+        save_run(self.project_root, run)
+
+        from .. import git_ops
+
+        original_branch = git_ops.current_branch(self.project_root) or "main"
+        if git_ops.is_git_repo(self.project_root):
+            branch = git_ops.create_agent_branch(self.project_root, run.run_id)
+            if branch:
+                run.git_branch = branch
+                save_run(self.project_root, run)
+                yield f"**Git:** Created branch `{branch}`\n\n"
+            else:
+                yield "**Git:** Could not create agent branch (continuing on current branch)\n\n"
+
+        # Phase 1: Research
+        self._transition(AgentPhase.RESEARCHING)
+        yield "## Phase 1: Research\n\n"
+        research_context = ""
+        try:
+            research_chunks: list[str] = []
+            async for chunk in self.research.research(
+                f"Research context and requirements for: {objective}"
+            ):
+                research_chunks.append(chunk)
+            research_context = "".join(research_chunks)
+            yield f"Research gathered ({len(research_context)} chars)\n\n"
+        except Exception as exc:
+            yield f"Research phase skipped: {exc}\n\n"
+
+        # Phase 2: Generate missions
+        self._transition(AgentPhase.GENERATING_MISSIONS)
+        yield "## Phase 2: Generating Mission Plan\n\n"
+
+        plan_prompt = self._build_plan_prompt(objective, research_context)
+        plan_chunks: list[str] = []
+        try:
+            async for chunk in self.toolbox.stream_action_query(plan_prompt):
+                plan_chunks.append(chunk)
+        except Exception as exc:
+            yield f"**Plan generation failed:** {exc}\n"
+            self._transition(AgentPhase.BLOCKED)
+            return
+
+        raw_plan = "".join(plan_chunks)
+        missions = MissionWriter.parse_plan_output(raw_plan)
+
+        if not missions:
+            missions = self._fallback_missions(objective)
+
+        writer = MissionWriter(self.project_root, run.run_id)
+        paths = writer.write_missions(missions)
+        run.missions = [
+            {"id": m.id, "title": m.title, "status": m.status.value}
+            for m in missions
+        ]
+        run.missions_total = len(missions)
+        save_run(self.project_root, run)
+
+        plan_summary = self._format_mission_plan(missions)
+        yield plan_summary + "\n"
+
+        if git_ops.is_git_repo(self.project_root):
+            git_ops.commit_milestone(
+                self.project_root,
+                f"[nala] Plan: {len(missions)} missions for '{objective[:50]}'",
+            )
+
+        # Phase 3: Await approval
+        if run.autonomy != AutonomyLevel.AUTONOMOUS:
+            self._transition(AgentPhase.AWAITING_APPROVAL)
+            yield (
+                "\n**Plan ready.** Use `/agent approve` to start execution "
+                "or `/agent reject` to revise.\n"
+            )
+            self._pending_missions = missions
+            self._pending_writer = writer
+            self._original_branch = original_branch
+            return
+
+        # Phase 4: Execute missions
+        yield "\n## Phase 3: Executing Missions\n\n"
+        async for chunk in self._execute_missions(run, missions, writer):
+            yield chunk
+
+        # Phase 5: Final summary
+        if git_ops.is_git_repo(self.project_root):
+            diff = git_ops.get_run_diff_summary(self.project_root, original_branch)
+            yield f"\n## Git Summary\n\n{diff}\n"
+
+        self._transition(AgentPhase.DONE)
+        yield f"\n**Agent run `{run.run_id}` complete.**\n"
+
+    async def approve_missions(self, approved: bool = True) -> AsyncIterator[str]:
+        """Handle mission plan approval after start_objective paused for approval."""
+        if self._run is None:
+            yield "No active agent run."
+            return
+
+        missions = getattr(self, "_pending_missions", None)
+        writer = getattr(self, "_pending_writer", None)
+        original_branch = getattr(self, "_original_branch", "main")
+
+        if not missions or not writer:
+            async for chunk in self.approve(approved):
+                yield chunk
+            return
+
+        if not approved:
+            self._transition(AgentPhase.PLANNING)
+            self._pending_missions = None
+            self._pending_writer = None
+            yield "Mission plan rejected. Use `/agent <objective>` to restart with a new plan.\n"
+            return
+
+        yield "## Executing Missions\n\n"
+        async for chunk in self._execute_missions(self._run, missions, writer):
+            yield chunk
+
+        from .. import git_ops
+        if git_ops.is_git_repo(self.project_root):
+            diff = git_ops.get_run_diff_summary(self.project_root, original_branch)
+            yield f"\n## Git Summary\n\n{diff}\n"
+
+        self._transition(AgentPhase.DONE)
+        yield f"\n**Agent run `{self._run.run_id}` complete.**\n"
+        self._pending_missions = None
+        self._pending_writer = None
+
+    async def _execute_missions(
+        self,
+        run: AgentRun,
+        missions: list[MissionFile],
+        writer: MissionWriter,
+    ) -> AsyncIterator[str]:
+        """Inner mission execution loop with git milestones."""
+        from .. import git_ops
+
+        self._transition(AgentPhase.EXECUTING_MISSIONS)
+        executor = MissionExecutor(self.config, self.project_root, run.run_id)
+
+        async for chunk in executor.execute_all(missions):
+            yield chunk
+
+        completed = sum(
+            1 for r in executor.results.values() if r.success
+        )
+        run.missions_completed = completed
+        run.missions = [
+            {"id": m.id, "title": m.title, "status": m.status.value}
+            for m in writer.load_missions()
+        ]
+        save_run(self.project_root, run)
+
+        if git_ops.is_git_repo(self.project_root) and completed > 0:
+            git_ops.commit_milestone(
+                self.project_root,
+                f"[nala] Executed {completed}/{len(missions)} missions for run {run.run_id}",
+            )
+
+    def _build_plan_prompt(self, objective: str, research_context: str) -> str:
+        brief = self.load_project_brief()
+        guidance = self.load_scoped_guidance()
+
+        parts = [
+            "You are a senior software architect planning an implementation.",
+            f"The user wants: {objective}",
+        ]
+        if brief:
+            parts.append(f"\n[PROJECT BRIEF]\n{brief[:2000]}\n[END BRIEF]")
+        if guidance:
+            parts.append(f"\n[SCOPED GUIDANCE]\n{guidance[:1000]}\n[END GUIDANCE]")
+        if research_context:
+            parts.append(f"\n[RESEARCH CONTEXT]\n{research_context[:3000]}\n[END RESEARCH]")
+
+        parts.append("""
+Generate a JSON array of missions. Each mission object must have:
+- "id": unique string like "mission-1"
+- "title": short descriptive title
+- "objective": 1-2 sentence description
+- "task_type": one of "plan", "code", "design", "research", "review", "verify"
+- "dependencies": array of mission IDs that must complete first (or empty)
+- "parallel_group": group ID for parallel execution, or "sequential"
+- "scope": array of file/directory paths this mission touches
+- "steps": array of concrete implementation steps
+- "verification": how to confirm the mission is done
+- "acceptance_criteria": array of verifiable outcomes
+
+Rules:
+- Order missions by dependency (foundation first, integration last)
+- Group independent missions into parallel groups where safe
+- Keep each mission focused (1 concern per mission)
+- Include a verification/review mission at the end
+- Return ONLY the JSON array, no other text
+""")
+        return "\n".join(parts)
+
+    def _fallback_missions(self, objective: str) -> list[MissionFile]:
+        """Create a minimal 3-mission plan when LLM output can't be parsed."""
+        return [
+            MissionFile(
+                id="mission-1",
+                title="Research and scope",
+                objective=f"Analyze the codebase and determine scope for: {objective}",
+                task_type="research",
+                steps=["Examine existing code structure", "Identify files to change", "Document approach"],
+                acceptance_criteria=["Scope documented"],
+            ),
+            MissionFile(
+                id="mission-2",
+                title="Implement changes",
+                objective=f"Implement: {objective}",
+                task_type="code",
+                dependencies=["mission-1"],
+                steps=["Make the required code changes", "Add error handling", "Test locally"],
+                acceptance_criteria=["Changes compile", "Core functionality works"],
+            ),
+            MissionFile(
+                id="mission-3",
+                title="Verify and review",
+                objective="Verify all changes work correctly",
+                task_type="review",
+                dependencies=["mission-2"],
+                steps=["Run tests", "Review diff", "Check for regressions"],
+                acceptance_criteria=["All tests pass", "No regressions"],
+            ),
+        ]
+
+    def _format_mission_plan(self, missions: list[MissionFile]) -> str:
+        lines = [f"### Mission Plan ({len(missions)} missions)\n"]
+        for i, m in enumerate(missions, 1):
+            deps = f" (depends on: {', '.join(m.dependencies)})" if m.dependencies else ""
+            group = f" [parallel: {m.parallel_group}]" if m.parallel_group != "sequential" else ""
+            lines.append(f"{i}. **{m.title}** — {m.task_type}{deps}{group}")
+            lines.append(f"   {m.objective[:120]}")
+        return "\n".join(lines)
+
     # ── Worker management (M32/M33) ───────────────────────────────────
 
     def spawn_worker(
@@ -649,7 +913,7 @@ class AgentManager:
                 "`/agent reject` — reject and re-plan",
                 "`/agent review` — review the diff first",
             ]
-        elif phase == AgentPhase.EXECUTING:
+        elif phase in (AgentPhase.EXECUTING, AgentPhase.EXECUTING_MISSIONS):
             choices = [
                 "`/agent status` — check progress",
                 "`/agent workers` — inspect workers",

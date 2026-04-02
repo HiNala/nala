@@ -26,10 +26,72 @@ class AgentPhase(str, Enum):
     VERIFYING = "verifying"
     REVIEWING = "reviewing"
     RESEARCHING = "researching"
+    GENERATING_MISSIONS = "generating_missions"
+    EXECUTING_MISSIONS = "executing_missions"
     DONE = "done"
     PAUSED = "paused"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
+
+
+class MissionStatus(str, Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass
+class MissionFile:
+    """A structured mission produced by the planning model."""
+
+    id: str
+    title: str
+    objective: str
+    task_type: str = "code"
+    model_preference: str = ""
+    dependencies: list[str] = field(default_factory=list)
+    parallel_group: str = "sequential"
+    scope: list[str] = field(default_factory=list)
+    steps: list[str] = field(default_factory=list)
+    verification: str = ""
+    acceptance_criteria: list[str] = field(default_factory=list)
+    status: MissionStatus = MissionStatus.PENDING
+    result_summary: str = ""
+
+    def to_markdown(self) -> str:
+        lines = [
+            f"# Mission: {self.title}",
+            "",
+            "## Objective",
+            self.objective,
+            "",
+            "## Task Type",
+            self.task_type,
+            "",
+        ]
+        if self.model_preference:
+            lines += ["## Model Preference", self.model_preference, ""]
+        lines += [
+            "## Dependencies",
+            ", ".join(self.dependencies) if self.dependencies else "none",
+            "",
+            "## Parallel Group",
+            self.parallel_group,
+            "",
+            "## Scope",
+            ", ".join(self.scope) if self.scope else "entire project",
+            "",
+            "## Steps",
+        ]
+        for i, step in enumerate(self.steps, 1):
+            lines.append(f"{i}. {step}")
+        lines += ["", "## Verification", self.verification or "Manual review", ""]
+        lines.append("## Acceptance Criteria")
+        for ac in self.acceptance_criteria:
+            lines.append(f"- [ ] {ac}")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -86,6 +148,10 @@ class AgentRun:
     workers: list[dict] = field(default_factory=list)
     checkpoints: list[dict] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
+    missions: list[dict] = field(default_factory=list)
+    git_branch: str = ""
+    missions_total: int = 0
+    missions_completed: int = 0
     created_at: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat(),
     )

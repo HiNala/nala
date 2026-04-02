@@ -1078,21 +1078,22 @@ impl App {
             "" | "help" => {
                 self.push_message(Message::assistant(
                     "## /agent — Autonomous Workflow\n\n\
-                     **Quick start:** `/agent <objective>`\n\n\
+                     **Quick start:** `/agent <objective>` or `/agent objective <goal>`\n\n\
+                     **Mission-driven (full orchestration):**\n\
+                     - `objective <goal>` — research → plan missions → execute → verify\n\
+                     - `missions` — show mission plan status\n\
+                     - `approve-missions` / `reject-missions` — accept or revise the plan\n\n\
                      **Core workflow:**\n\
                      - `plan [topic]` — generate a plan\n\
                      - `approve` / `reject` — accept or revise the plan\n\
                      - `run` — execute the plan\n\
-                     - `review` — review changes\n\
-                     - `verify` — run tests/linting\n\
-                     - `status` — current state\n\
-                     - `stop` / `pause` / `resume` — control the run\n\n\
+                     - `review` — review changes  |  `verify` — run tests\n\
+                     - `status` — current state  |  `stop` / `pause` / `resume`\n\n\
                      **More:**\n\
                      - `scm` — git overview  |  `research <q>` — look up docs\n\
                      - `workers` — list workers  |  `next` — suggested steps\n\
                      - `mode <level>` — autonomy: observe, plan, patch, autonomous\n\
                      - `checkpoint` / `checkpoints` / `restore` — save/load state\n\n\
-                     **Flow:** plan → approve → run → review → verify → done\n\
                      **Panel:** `Ctrl+G` toggles agent workbench",
                 ));
             }
@@ -1352,6 +1353,39 @@ impl App {
             "next" => {
                 self.agent_dispatch(|b, _tx| async move {
                     b.agent_next_steps().await.map_err(|e| e.to_string())
+                });
+            }
+            // ── Mission-driven orchestration (P7-02) ──────────────
+            "objective" | "obj" => {
+                if rest.is_empty() {
+                    self.push_message(Message::error("Usage: /agent objective <goal>"));
+                    return;
+                }
+                let objective = rest.to_string();
+                let autonomy = self.agent_mode.clone();
+                self.push_message(Message::system(format!(
+                    "Agent: starting full orchestration for \"{}\" (mode: {})",
+                    &rest[..rest.len().min(60)], autonomy
+                )));
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_objective(objective, autonomy).await.map_err(|e| e.to_string())
+                });
+            }
+            "missions" => {
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_missions_status().await.map_err(|e| e.to_string())
+                });
+            }
+            "approve-missions" => {
+                self.push_message(Message::system("Agent: missions approved, executing..."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_approve_missions(true).await.map_err(|e| e.to_string())
+                });
+            }
+            "reject-missions" => {
+                self.push_message(Message::system("Agent: missions rejected."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_approve_missions(false).await.map_err(|e| e.to_string())
                 });
             }
             _ => {

@@ -271,6 +271,7 @@ def _broadcast_agent_state(req_id: str) -> None:
     choices = _agent_manager.suggest_next_steps() if _agent_manager else []
     checkpoint_count = len(run.checkpoints) if hasattr(run, "checkpoints") else 0
     priority = _agent_manager.notification_priority() if _agent_manager else "quiet"
+    missions_data = run.missions if hasattr(run, "missions") else []
     write_response({
         "id": req_id,
         "type": "agent_state",
@@ -288,6 +289,10 @@ def _broadcast_agent_state(req_id: str) -> None:
         "choices": choices,
         "checkpoint_count": checkpoint_count,
         "notification_priority": priority,
+        "missions": missions_data,
+        "missions_total": getattr(run, "missions_total", 0),
+        "missions_completed": getattr(run, "missions_completed", 0),
+        "git_branch": getattr(run, "git_branch", ""),
     })
 
 
@@ -1330,6 +1335,59 @@ async def handle_request(
             choices = _agent_manager.suggest_next_steps()
             text = "**Next steps:**\n" + "\n".join(f"  - {c}" for c in choices)
             _stream_text(req_id, text)
+
+    # ── Mission-driven orchestration (P7-02) ────────────────────────
+
+    elif req_type == "agent_objective":
+        objective = req.get("objective", "").strip()
+        autonomy = req.get("autonomy", "autonomous").strip()
+        if not objective:
+            write_response({"id": req_id, "type": "error", "text": "Empty objective"})
+            return
+        if _agent_manager is None:
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            return
+        try:
+            write_response({
+                "id": req_id, "type": "phase_update",
+                "phase": "starting", "detail": objective[:100],
+            })
+            async for chunk in _agent_manager.start_objective(objective, autonomy):
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+            _broadcast_agent_state(req_id)
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "agent_approve_missions":
+        approved = req.get("approved", True)
+        if _agent_manager is None:
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            return
+        try:
+            async for chunk in _agent_manager.approve_missions(approved):
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+            _broadcast_agent_state(req_id)
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "agent_missions_status":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            run = _agent_manager.current_run
+            if run and run.missions:
+                lines = [f"**Missions** ({run.missions_completed}/{run.missions_total})\n"]
+                for m in run.missions:
+                    status_icon = {
+                        "pending": "⏳", "in_progress": "🔄",
+                        "completed": "✅", "failed": "❌", "skipped": "⏭️",
+                    }.get(m.get("status", ""), "?")
+                    lines.append(f"  {status_icon} **{m.get('title', '?')}** — {m.get('status', '?')}")
+                _stream_text(req_id, "\n".join(lines))
+            else:
+                _stream_text(req_id, "No mission plan active. Use `/agent objective <goal>` to start.")
 
     # ── Models registry (P7-01) ──────────────────────────────────────
 

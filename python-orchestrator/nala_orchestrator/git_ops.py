@@ -284,6 +284,72 @@ def cleanup_worktree(root: Path, label: str) -> bool:
     return result is not None or not wt_dir.exists()
 
 
+# ── Agent orchestration git operations ────────────────────────────────
+
+
+def create_agent_branch(root: Path, run_id: str) -> str | None:
+    """Create a feature branch for an agent run. Returns branch name or None."""
+    if not is_git_repo(root):
+        return None
+    branch = f"nala/agent-{run_id}"
+    existing = current_branch(root)
+    if existing == branch:
+        return branch
+    result = _run(["git", "checkout", "-b", branch], root, timeout=10)
+    if result is not None:
+        return branch
+    check = _run(["git", "checkout", branch], root, timeout=10)
+    if check is not None:
+        return branch
+    return None
+
+
+def commit_milestone(root: Path, message: str, files: list[str] | None = None) -> str | None:
+    """Stage and commit. Returns the short hash or None on failure."""
+    if not is_git_repo(root):
+        return None
+    if files:
+        for f in files:
+            _run(["git", "add", f], root)
+    else:
+        _run(["git", "add", "-A"], root)
+    uc = uncommitted_summary(root)
+    if uc["staged"] == 0 and uc["total"] == 0:
+        return None
+    result = _run(["git", "commit", "-m", message], root, timeout=30)
+    if result is None:
+        return None
+    short = _run(["git", "rev-parse", "--short", "HEAD"], root)
+    return short
+
+
+def switch_back_to_branch(root: Path, branch: str) -> bool:
+    """Switch back to a branch (e.g., after agent run on feature branch)."""
+    if not is_git_repo(root):
+        return False
+    return _run(["git", "checkout", branch], root, timeout=10) is not None
+
+
+def get_run_diff_summary(root: Path, base_branch: str = "main") -> str:
+    """Summarise changes between the current branch and base."""
+    if not is_git_repo(root):
+        return "Not a git repository."
+    head = current_branch(root) or "HEAD"
+    if head == base_branch:
+        return "Agent branch is the same as base — no diff."
+    return branch_compare(root, base_branch, head)
+
+
+def create_worktree_for_worker(root: Path, worker_id: str) -> str | None:
+    """Create a worktree scoped to a worker. Returns path or None."""
+    return create_worktree(root, f"worker-{worker_id}")
+
+
+def cleanup_worker_worktree(root: Path, worker_id: str) -> bool:
+    """Clean up a worker's worktree."""
+    return cleanup_worktree(root, f"worker-{worker_id}")
+
+
 def worktree_status(root: Path) -> str:
     """Human-readable worktree summary."""
     trees = list_worktrees(root)

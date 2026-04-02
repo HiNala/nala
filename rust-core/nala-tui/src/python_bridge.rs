@@ -151,6 +151,10 @@ pub enum BridgeRequest {
     // ── Models registry (P7-01) ─────────────────────────────────────
     ModelsList,
     ModelsRefresh,
+    // ── Mission-driven orchestration (P7-02) ──────────────────────
+    AgentObjective { objective: String, autonomy: String },
+    AgentApproveMissions { approved: bool },
+    AgentMissionsStatus,
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -562,6 +566,21 @@ impl PythonBridge {
 
     pub async fn models_refresh(&self) -> Result<()> {
         self.request_tx.send(BridgeRequest::ModelsRefresh).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_objective(&self, objective: String, autonomy: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentObjective { objective, autonomy }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_approve_missions(&self, approved: bool) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentApproveMissions { approved }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_missions_status(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentMissionsStatus).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -995,6 +1014,21 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "models_refresh",
                             }),
+                            BridgeRequest::AgentObjective { objective, autonomy } => json!({
+                                "id": id,
+                                "type": "agent_objective",
+                                "objective": objective,
+                                "autonomy": autonomy,
+                            }),
+                            BridgeRequest::AgentApproveMissions { approved } => json!({
+                                "id": id,
+                                "type": "agent_approve_missions",
+                                "approved": approved,
+                            }),
+                            BridgeRequest::AgentMissionsStatus => json!({
+                                "id": id,
+                                "type": "agent_missions_status",
+                            }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
                             let _ = bg_tx.send(BackgroundEvent::AssistantError(
@@ -1335,6 +1369,16 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 has_sessions,
                 suggestions,
             }).await;
+        }
+        "phase_update" => {
+            let phase = msg.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let detail = msg.get("detail").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let text = if detail.is_empty() {
+                format!("[{}]", phase)
+            } else {
+                format!("[{}] {}", phase, detail)
+            };
+            let _ = bg_tx.send(BackgroundEvent::SystemMessage(text)).await;
         }
         "agent_state" => {
             let run_id = msg.get("run_id").and_then(|v| v.as_str())
