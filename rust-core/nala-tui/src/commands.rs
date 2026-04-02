@@ -71,14 +71,81 @@ impl App {
                 let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
                 self.generate_mission(focus);
             }
+            // ── /agent: primary autonomous workflow entrypoint ────────────
+            "/agent" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.handle_agent_command(args);
+            }
+            // ── Deprecated aliases → route to /agent with hint ───────────
             "/act" => {
                 let query = parts.get(1).copied().unwrap_or("").trim().to_string();
+                self.push_message(Message::system(
+                    "Hint: /act is now /agent <instruction>. Routing for you.",
+                ));
                 if query.is_empty() {
-                    self.push_message(Message::error("Usage: /act <instruction>"));
+                    self.push_message(Message::error("Usage: /agent <instruction>"));
                 } else {
-                    self.send_action_query(query);
+                    self.handle_agent_command(&query);
                 }
             }
+            "/task" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.push_message(Message::system(
+                    "Hint: /task is now part of /agent. Routing for you.",
+                ));
+                match args {
+                    "" | "status" => self.task_status(),
+                    "list" => self.task_list(),
+                    "done" => self.task_done(String::new()),
+                    _ => {
+                        if args.starts_with("done ") {
+                            self.task_done(args.strip_prefix("done ").unwrap_or("").to_string());
+                        } else {
+                            self.task_create(args.to_string());
+                        }
+                    }
+                }
+            }
+            "/team" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.push_message(Message::system(
+                    "Hint: /team is now internal to /agent. Routing for you.",
+                ));
+                match args {
+                    "status" => self.team_status(),
+                    "cancel" => self.team_cancel(),
+                    "" => self.push_message(Message::error(
+                        "Usage: /agent <objective>  |  /agent status  |  /agent stop",
+                    )),
+                    objective => self.team_start(objective.to_string()),
+                }
+            }
+            "/brain" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.push_message(Message::system(
+                    "Hint: /brain is now /agent. Routing for you.",
+                ));
+                self.handle_agent_command(args);
+            }
+            "/diff" => {
+                self.push_message(Message::system(
+                    "Hint: /diff is now /agent review. Routing for you.",
+                ));
+                self.git_diff();
+            }
+            "/branch" => {
+                self.push_message(Message::system(
+                    "Hint: /branch is now part of /agent status. Routing for you.",
+                ));
+                self.git_branch();
+            }
+            "/status" => {
+                self.push_message(Message::system(
+                    "Hint: /status is now /agent status. Routing for you.",
+                ));
+                self.git_status();
+            }
+            // ── Stable commands ──────────────────────────────────────────
             "/context" => self.show_context_usage(),
             "/compact" => {
                 let focus = parts.get(1).copied().unwrap_or("").trim().to_string();
@@ -89,17 +156,6 @@ impl App {
                 self.handle_dashboard_command(args);
             }
             "/graph" => self.graph_stats(),
-            "/team" => {
-                let args = parts.get(1).copied().unwrap_or("").trim();
-                match args {
-                    "status" => self.team_status(),
-                    "cancel" => self.team_cancel(),
-                    "" => self.push_message(Message::error(
-                        "Usage: /team <objective>  |  /team status  |  /team cancel",
-                    )),
-                    objective => self.team_start(objective.to_string()),
-                }
-            }
             "/handoff" => {
                 let args = parts.get(1).copied().unwrap_or("").trim();
                 match args {
@@ -115,28 +171,6 @@ impl App {
                 self.messages.clear();
             }
             "/undo" => self.undo_actions(),
-            "/diff" => self.git_diff(),
-            "/branch" => self.git_branch(),
-            "/status" => self.git_status(),
-            "/task" => {
-                let args = parts.get(1).copied().unwrap_or("").trim();
-                match args {
-                    "" | "status" => self.task_status(),
-                    "list" => self.task_list(),
-                    "done" => self.task_done(String::new()),
-                    _ => {
-                        if args.starts_with("done ") {
-                            self.task_done(args.strip_prefix("done ").unwrap_or("").to_string());
-                        } else {
-                            self.task_create(args.to_string());
-                        }
-                    }
-                }
-            }
-            "/brain" => {
-                let args = parts.get(1).copied().unwrap_or("").trim();
-                self.handle_brain_command(args);
-            }
             "/tree" | "/files" => {
                 self.show_file_tree();
             }
@@ -159,71 +193,50 @@ impl App {
 
     fn show_help(&mut self) {
         self.push_message(Message::assistant(concat!(
-            "Available commands:\n",
-            "  /scan                  — scan project files\n",
-            "  /index                 — full index (parse + symbols)\n",
-            "  /scope                 — show current analysis scope\n",
-            "  /scope <relative/path> — analyze only that subtree\n",
-            "  /scope clear           — analyze whole project again\n",
+            "## Agent Workflow\n",
+            "  /agent                 — show agent help and current run status\n",
+            "  /agent <objective>     — start objective-driven agent run\n",
+            "  /agent plan [topic]    — create or refresh a plan\n",
+            "  /agent run             — execute the current plan\n",
+            "  /agent review          — review current diff and pending changes\n",
+            "  /agent verify          — run verification analysis\n",
+            "  /agent hotspot         — quick hotspot triage\n",
+            "  /agent status          — show objective, phase, tasks, git state\n",
+            "  /agent stop            — cancel the active run\n\n",
+            "## Code Intelligence\n",
             "  /analyze               — run all analysis perspectives\n",
-            "  /analyze quick         — run fast subset (complexity/security/dependency)\n",
-            "  /analyze <name>        — run one perspective (security, complexity, …)\n",
+            "  /analyze quick         — fast subset (complexity/security/dependency)\n",
+            "  /scope <path>          — focus analysis on a subtree\n",
             "  /def <file:l:c>        — LSP go-to-definition\n",
             "  /refs <file:l:c>       — LSP find-references\n",
             "  /hover <file:l:c>      — LSP hover docs\n",
-            "  /lsp status            — show LSP server status for this repo\n",
-            "  /act <instruction>     — ask AI to make changes (with diff preview + confirm)\n",
-            "  /undo                  — revert the last batch of applied actions\n",
-            "  /graph                 — show Neo4j code graph statistics\n",
-            "  /team <objective>      — start a multi-agent team run\n",
-            "  /team status           — show current team run status\n",
-            "  /team cancel           — cancel the current team run\n",
-            "  /handoff               — show latest session handoff document\n",
-            "  /handoff save          — save a handoff document now\n",
-            "  /handoff history       — show full handoff chain\n",
+            "  /diag                  — show LSP diagnostics\n",
+            "  /graph                 — code graph statistics\n",
+            "  /read <file>           — display file contents in chat\n",
+            "  /tree                  — show project file tree\n\n",
+            "## Session & Memory\n",
             "  /session               — list past sessions\n",
             "  /session new           — start a fresh session\n",
             "  /session load <id>     — resume a past session\n",
-            "  /session compare <a> <b> — compare two saved sessions\n",
-            "  /session summary       — show current session summary\n",
-            "  /generate              — generate a mission doc from findings\n",
-            "  /generate <focus>      — generate focused on a topic\n",
             "  /memory                — show memory summary\n",
-            "  /memory sessions       — list remembered sessions\n",
-            "  /memory forget <target> — forget specific memory entries\n",
-            "  /context               — show context window usage breakdown\n",
-            "  /compact               — compact context window to free tokens\n",
-            "  /compact <focus>       — compact while preserving focus topic\n",
-            "  /dashboard             — start the local dashboard on port 3000\n",
-            "  /dashboard stop        — stop the running dashboard\n",
-            "  /dashboard status      — show dashboard status\n",
-            "  /diag                  — show LSP diagnostics summary\n",
-            "  /diag errors           — show only errors\n",
-            "  /diag warnings         — show only warnings\n",
-            "  /diff                  — show uncommitted git changes\n",
-            "  /branch                — show branch info and recent commits\n",
-            "  /status                — combined git status overview\n",
-            "  /task <objective>      — create a new task for the agent to track\n",
-            "  /task status           — show current task state\n",
-            "  /task list             — list all tasks in this session\n",
-            "  /task done [summary]   — mark current task complete\n",
-            "  /brain                 — brain mode help and quick actions\n",
-            "  /brain investigate <objective> — create task + start deep run\n",
-            "  /brain hotspot         — run quick hotspot triage\n",
-            "  /brain review-diff     — review current git diff\n",
-            "  /brain verify          — run quick verification analysis\n",
-            "  /brain status          — show doctor + task + team status\n",
-            "  /read <file>           — display a file's contents in the chat\n",
-            "  /tree                  — show project file tree\n",
-            "  /doctor                — environment and readiness diagnostics\n",
-            "  /clear                 — clear message log\n",
-            "  /help                  — show this help\n",
-            "  /quit | /exit          — exit\n\n",
-            "Key bindings:\n",
-            "  Up/Down arrows         — cycle through command history\n",
-            "  Shift+Up/Down          — scroll message area\n",
-            "  PgUp/PgDn              — scroll message area (larger jump)\n",
-            "  Mouse wheel            — scroll message area\n",
+            "  /context               — show context window usage\n",
+            "  /compact               — compact context to free tokens\n",
+            "  /handoff               — show session handoff document\n\n",
+            "## Utilities\n",
+            "  /scan                  — quick file scan (hash-only)\n",
+            "  /index                 — full index (parse + symbols)\n",
+            "  /generate              — generate mission doc from findings\n",
+            "  /dashboard             — start local dashboard\n",
+            "  /undo                  — revert last applied actions\n",
+            "  /doctor                — environment diagnostics\n",
+            "  /clear                 — clear messages\n",
+            "  /help                  — this help\n",
+            "  /quit                  — exit\n\n",
+            "## Key Bindings\n",
+            "  Up/Down arrows         — cycle command history\n",
+            "  Shift+Up/Down          — scroll messages\n",
+            "  PgUp/PgDn              — scroll messages (larger jump)\n",
+            "  Mouse wheel            — scroll messages\n",
             "  Ctrl+B                 — toggle file panel\n",
             "  Ctrl+E                 — toggle session panel\n",
             "  Esc                    — cancel / clear input\n\n",
@@ -430,6 +443,7 @@ impl App {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn send_action_query(&mut self, text: String) {
         match &self.python_bridge {
             None => {
@@ -1194,7 +1208,7 @@ impl App {
         });
     }
 
-    fn handle_brain_command(&mut self, args: &str) {
+    fn handle_agent_command(&mut self, args: &str) {
         let mut parts = args.splitn(2, ' ');
         let sub = parts.next().unwrap_or("").trim();
         let rest = parts.next().unwrap_or("").trim();
@@ -1202,56 +1216,125 @@ impl App {
         match sub {
             "" | "help" => {
                 self.push_message(Message::assistant(
-                    "Brain Mode (optional deep workflow)\n\
-                     \n\
-                     Commands:\n\
-                     - /brain investigate <objective> : create tracked task and start team run\n\
-                     - /brain hotspot                 : run quick hotspot triage\n\
-                     - /brain review-diff             : inspect current git diff\n\
-                     - /brain verify                  : run quick verification analysis\n\
-                     - /brain status                  : doctor + task + team status snapshot\n\
-                     \n\
-                     Workflow: investigate -> review-diff -> verify -> iterate.",
+                    "## /agent — Autonomous Workflow\n\n\
+                     **Quick start:** `/agent <objective>` to begin an objective-driven run.\n\n\
+                     **Subcommands:**\n\
+                     - `/agent <objective>`  — start or resume an objective-driven agent run\n\
+                     - `/agent plan [topic]` — create or refresh a plan without executing\n\
+                     - `/agent run`          — execute the current plan\n\
+                     - `/agent review`       — review current diff and pending changes\n\
+                     - `/agent verify`       — run verification analysis\n\
+                     - `/agent hotspot`      — quick hotspot triage to find high-value work\n\
+                     - `/agent status`       — show objective, phase, tasks, git state\n\
+                     - `/agent stop`         — cancel the active run\n\
+                     - `/agent resume`       — resume a paused or blocked run\n\n\
+                     **Workflow:** plan → approve → run → review → verify → done.",
                 ));
+            }
+            "plan" => {
+                let topic = rest.to_string();
+                self.push_message(Message::system(if topic.is_empty() {
+                    "Agent: generating plan from current context...".to_string()
+                } else {
+                    format!("Agent: planning for: {}", topic)
+                }));
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_plan(topic).await.map_err(|e| e.to_string())
+                });
+            }
+            "run" => {
+                self.push_message(Message::system("Agent: executing plan..."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_run().await.map_err(|e| e.to_string())
+                });
+            }
+            "review" | "review-diff" => {
+                self.push_message(Message::system("Agent: reviewing current changes..."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_review().await.map_err(|e| e.to_string())
+                });
+            }
+            "verify" => {
+                self.push_message(Message::system("Agent: running verification analysis..."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_verify().await.map_err(|e| e.to_string())
+                });
+            }
+            "hotspot" => {
+                self.push_message(Message::system("Agent: running hotspot triage..."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_hotspot().await.map_err(|e| e.to_string())
+                });
+            }
+            "status" => {
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_status().await.map_err(|e| e.to_string())
+                });
+            }
+            "stop" | "cancel" => {
+                self.push_message(Message::system("Agent: cancelling active run..."));
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_stop().await.map_err(|e| e.to_string())
+                });
+            }
+            "resume" => {
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_resume().await.map_err(|e| e.to_string())
+                });
             }
             "investigate" | "refactor" | "work" => {
                 if rest.is_empty() {
                     self.push_message(Message::error(
-                        "Usage: /brain investigate <objective>",
+                        "Usage: /agent investigate <objective>",
                     ));
                     return;
                 }
+                let objective = rest.to_string();
                 self.push_message(Message::system(format!(
-                    "Brain mode started for objective: {}",
+                    "Agent: starting investigation: {}",
                     rest
                 )));
-                self.task_create(rest.to_string());
-                self.team_start(rest.to_string());
-            }
-            "hotspot" => {
-                self.push_message(Message::system(
-                    "Brain mode: running quick hotspot triage...",
-                ));
-                self.run_perspectives("quick".to_string());
-            }
-            "review-diff" => self.git_diff(),
-            "verify" => {
-                self.push_message(Message::system(
-                    "Brain mode: running quick verification analysis...",
-                ));
-                self.run_perspectives("quick".to_string());
-            }
-            "status" => {
-                self.doctor();
-                self.task_status();
-                self.team_status();
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_start(objective).await.map_err(|e| e.to_string())
+                });
             }
             _ => {
-                self.push_message(Message::error(
-                    "Unknown /brain subcommand. Use /brain help.",
-                ));
+                let objective = args.trim().to_string();
+                if objective.is_empty() {
+                    self.push_message(Message::error("Usage: /agent <objective>"));
+                } else {
+                    self.push_message(Message::system(format!(
+                        "Agent: working on \"{}\"",
+                        &objective[..objective.len().min(80)]
+                    )));
+                    self.agent_dispatch(move |b, _tx| async move {
+                        b.agent_start(objective).await.map_err(|e| e.to_string())
+                    });
+                }
             }
         }
+    }
+
+    fn agent_dispatch<F, Fut>(&mut self, f: F)
+    where
+        F: FnOnce(crate::python_bridge::PythonBridge, tokio::sync::mpsc::Sender<BackgroundEvent>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<(), String>> + Send,
+    {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system(
+                "AI bridge is starting up — please wait a moment.",
+            ));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        self.mode = AppMode::Analyzing;
+        tokio::spawn(async move {
+            if let Err(e) = f(bridge, tx.clone()).await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e))
+                    .await;
+            }
+        });
     }
 }
 

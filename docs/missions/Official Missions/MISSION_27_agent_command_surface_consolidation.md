@@ -132,12 +132,12 @@ Those can still exist internally, but `/agent` should be the umbrella workflow t
 
 ## Acceptance Criteria
 
-- [ ] `/agent` exists as the primary entrypoint for the optional autonomous workflow
-- [ ] `/brain` is deprecated in help text and routed to `/agent`
-- [ ] `/act`, `/task`, `/team`, `/diff`, `/branch`, and `/status` are either folded into `/agent` or explicitly marked transitional
-- [ ] Slash completion and `/help` make `/agent` the obvious path
-- [ ] The command surface is simpler after the change, not more complex
-- [ ] README and flow docs match the new command model
+- [x] `/agent` exists as the primary entrypoint for the optional autonomous workflow
+- [x] `/brain` is deprecated in help text and routed to `/agent`
+- [x] `/act`, `/task`, `/team`, `/diff`, `/branch`, and `/status` are either folded into `/agent` or explicitly marked transitional
+- [x] Slash completion and `/help` make `/agent` the obvious path
+- [x] The command surface is simpler after the change, not more complex
+- [x] README and flow docs match the new command model
 
 ## Estimated Complexity
 

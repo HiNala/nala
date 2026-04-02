@@ -18,9 +18,9 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 - **LSP integration** — go-to-definition, find-references, hover, live diagnostics
 - **Analysis perspectives** — security, complexity, churn, performance, dependency audits
 - **Session management** — save, resume, and review past analysis sessions
-- **Action mode** — `/act` to ask AI to propose file edits with diff preview + y/n confirmation
+- **Agent workflow** — `/agent` unified autonomous entrypoint: plan, run, review, verify, hotspot triage
+- **Action mode** — `/agent <instruction>` to propose file edits with diff preview + y/n confirmation
 - **Context window management** — `/context` usage, `/compact` compaction with handoff docs
-- **Brain Mode (optional)** — `/brain` workflow for deeper objective-driven investigation, triage, and verification
 - **Clipboard paste** — bracketed paste support for pasting text from clipboard into input
 
 ### Terminal UI Highlights
@@ -97,33 +97,56 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 
 ### Commands inside Nala
 
+**Agent Workflow** (primary autonomous entrypoint):
+
 | Command | Description |
 |---------|-------------|
-| `/help` | Show all available commands |
-| `/scan` | Scan project files (fast, hash-only) |
-| `/index` | Full index: parse + symbol extraction |
-| `/analyze` | Run analysis perspectives |
-| `/scope` | Show or set analysis scope |
-| `/scope <path>` | Analyze a specific subtree |
-| `/scope clear` | Reset scope to full project |
-| `/lsp status` | Show LSP runtime status |
-| `/def <file>:<line>:<col>` | Go-to-definition lookup |
-| `/refs <file>:<line>:<col>` | Find references lookup |
-| `/hover <file>:<line>:<col>` | Hover information lookup |
-| `/diag` | Show LSP diagnostics summary (errors/warnings) |
-| `/act <instruction>` | Ask AI to propose structured file edits (with preview/confirm) |
-| `/task <objective>` | Create and track a task in the session ledger |
-| `/task status` / `/task list` / `/task done` | Inspect and complete tracked tasks |
-| `/brain` | Show optional Brain Mode workflow help |
-| `/brain investigate <objective>` | Start deep objective workflow (task + team run) |
-| `/brain hotspot` / `/brain verify` | Run quick triage / verification analysis |
-| `/brain review-diff` | Review current git diff via AI bridge |
-| `/branch` / `/diff` / `/status` | Repo-aware git summaries inside TUI |
+| `/agent` | Show agent help and current run status |
+| `/agent <objective>` | Start an objective-driven agent run |
+| `/agent plan [topic]` | Create or refresh a plan without executing |
+| `/agent run` | Execute the approved plan |
+| `/agent review` | Review current diff and pending changes |
+| `/agent verify` | Run verification analysis |
+| `/agent hotspot` | Quick hotspot triage for high-value work |
+| `/agent status` | Show objective, phase, tasks, git state |
+| `/agent stop` | Cancel the active run |
+
+**Code Intelligence:**
+
+| Command | Description |
+|---------|-------------|
+| `/analyze` | Run analysis perspectives (`quick`, `all`, or by name) |
+| `/scope <path>` | Focus analysis on a subtree (`/scope clear` to reset) |
+| `/def`, `/refs`, `/hover` | LSP go-to-definition, find-references, hover docs |
+| `/diag` | Show LSP diagnostics (errors/warnings) |
+| `/graph` | Code graph statistics |
+| `/read <file>` | Display file contents in chat |
 | `/tree` / `/files` | Show project file tree |
-| `/read <file>` | Display file contents in the chat |
-| `/session` | List past sessions |
+
+**Session & Memory:**
+
+| Command | Description |
+|---------|-------------|
+| `/session` | List, create, load, or compare sessions |
+| `/memory` | Show memory summary or forget entries |
+| `/context` | Show context window usage breakdown |
+| `/compact` | Compact context to free tokens |
+| `/handoff` | Session handoff documents |
+
+**Utilities:**
+
+| Command | Description |
+|---------|-------------|
+| `/scan` / `/index` | Scan files or full index (parse + symbols) |
+| `/generate` | Generate mission doc from findings |
+| `/dashboard` | Start/stop local dashboard |
+| `/undo` | Revert last applied actions |
+| `/doctor` | Environment diagnostics |
+| `/help` | Full command reference |
 | `/quit` | Exit |
 | *Any other text* | Ask the AI assistant |
+
+> **Deprecated aliases:** `/brain`, `/act`, `/task`, `/team`, `/diff`, `/branch`, `/status` still work but route to `/agent` with a migration hint.
 
 ### Key Bindings
 

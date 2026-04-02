@@ -83,6 +83,7 @@ import sys
 import threading
 from pathlib import Path
 
+from .agent_runtime.manager import AgentManager
 from .agents.action_executor import ActionExecutor
 from .agents.action_extractor import extract_actions
 from .agents.actions import Action
@@ -121,6 +122,9 @@ _task_ledger: TaskLedger | None = None
 
 # Singleton lead agent — created on first team_start, reused for status/cancel.
 _lead_agent: LeadAgent | None = None
+
+# Agent runtime manager — central control plane for /agent runs.
+_agent_manager: AgentManager | None = None
 
 # Flush immediately — Rust reads line-by-line
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
@@ -1010,6 +1014,97 @@ async def handle_request(
             err = f"Startup intelligence error: {e}"
             write_response({"id": req_id, "type": "error", "text": err})
 
+    # ── Agent runtime requests ──────────────────────────────────────────
+    elif req_type == "agent_start":
+        objective = req.get("objective", "").strip()
+        if not objective:
+            write_response({"id": req_id, "type": "error", "text": "Empty objective"})
+            return
+        if _agent_manager is None:
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            return
+        try:
+            async for chunk in _agent_manager.handle_objective(objective):
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "agent_status":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not initialised.")
+        else:
+            _stream_text(req_id, _agent_manager.status())
+
+    elif req_type == "agent_plan":
+        topic = req.get("topic", "").strip()
+        if _agent_manager is None:
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            return
+        try:
+            async for chunk in _agent_manager.plan(topic):
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "agent_run":
+        if _agent_manager is None:
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            return
+        try:
+            async for chunk in _agent_manager.run_execution():
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "agent_review":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+            return
+        try:
+            text = await _agent_manager.review()
+            _stream_text(req_id, text)
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "agent_verify":
+        if _agent_manager is None:
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            return
+        try:
+            async for chunk in _agent_manager.verify():
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "agent_hotspot":
+        if _agent_manager is None:
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            return
+        try:
+            async for chunk in _agent_manager.hotspot():
+                write_response({"id": req_id, "type": "chunk", "text": chunk})
+            write_response({"id": req_id, "type": "done"})
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": str(e)})
+
+    elif req_type == "agent_stop":
+        if _agent_manager is None:
+            _stream_text(req_id, "No agent runtime.")
+        else:
+            msg = _agent_manager.stop()
+            _stream_text(req_id, msg)
+
+    elif req_type == "agent_resume":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            msg = _agent_manager.resume()
+            _stream_text(req_id, msg)
+
     else:
         write_response({"id": req_id, "type": "error", "text": f"Unknown type: {req_type}"})
 
@@ -1130,6 +1225,14 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
     global _task_ledger
     sessions_dir = root / ".nala" / "sessions"
     _task_ledger = TaskLedger(sessions_dir)
+
+    # Initialise the agent runtime manager.
+    global _agent_manager
+    _agent_manager = AgentManager(
+        config, root,
+        orchestrator=agent,
+        task_ledger=_task_ledger,
+    )
 
     # Signal ready
     write_response({

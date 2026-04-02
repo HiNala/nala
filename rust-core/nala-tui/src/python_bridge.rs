@@ -116,6 +116,16 @@ pub enum BridgeRequest {
     TaskList,
     /// Complete current task.
     TaskDone { summary: String },
+    // ── Agent runtime ────────────────────────────────────────────
+    AgentStart { objective: String },
+    AgentStatus,
+    AgentPlan { topic: String },
+    AgentRun,
+    AgentReview,
+    AgentVerify,
+    AgentHotspot,
+    AgentStop,
+    AgentResume,
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -380,6 +390,53 @@ impl PythonBridge {
     /// Complete the current task.
     pub async fn task_done(&self, summary: String) -> Result<()> {
         self.request_tx.send(BridgeRequest::TaskDone { summary }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    // ── Agent runtime ────────────────────────────────────────────
+
+    pub async fn agent_start(&self, objective: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentStart { objective }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_status(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentStatus).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_plan(&self, topic: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentPlan { topic }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_run(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentRun).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_review(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentReview).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_verify(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentVerify).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_hotspot(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentHotspot).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_stop(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentStop).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_resume(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentResume).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -677,6 +734,45 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "task_done",
                                 "summary": summary,
+                            }),
+                            // ── Agent runtime ────────────────────────
+                            BridgeRequest::AgentStart { objective } => json!({
+                                "id": id,
+                                "type": "agent_start",
+                                "objective": objective,
+                            }),
+                            BridgeRequest::AgentStatus => json!({
+                                "id": id,
+                                "type": "agent_status",
+                            }),
+                            BridgeRequest::AgentPlan { topic } => json!({
+                                "id": id,
+                                "type": "agent_plan",
+                                "topic": topic,
+                            }),
+                            BridgeRequest::AgentRun => json!({
+                                "id": id,
+                                "type": "agent_run",
+                            }),
+                            BridgeRequest::AgentReview => json!({
+                                "id": id,
+                                "type": "agent_review",
+                            }),
+                            BridgeRequest::AgentVerify => json!({
+                                "id": id,
+                                "type": "agent_verify",
+                            }),
+                            BridgeRequest::AgentHotspot => json!({
+                                "id": id,
+                                "type": "agent_hotspot",
+                            }),
+                            BridgeRequest::AgentStop => json!({
+                                "id": id,
+                                "type": "agent_stop",
+                            }),
+                            BridgeRequest::AgentResume => json!({
+                                "id": id,
+                                "type": "agent_resume",
                             }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {

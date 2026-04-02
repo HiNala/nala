@@ -160,12 +160,12 @@ Users ask `/agent`, not `/team`.
 
 ## Acceptance Criteria
 
-- [ ] `/agent` is backed by a single runtime object in Python
-- [ ] The active agent run has explicit phases and durable state
-- [ ] The runtime can start, report status, resume, and cancel a run
-- [ ] Task ledger integration is automatic rather than manual
-- [ ] Multi-agent execution is hidden behind the runtime instead of exposed as a separate primary workflow
-- [ ] Restarting Nala does not destroy the current agent run state
+- [x] `/agent` is backed by a single runtime object in Python (`AgentManager`)
+- [x] The active agent run has explicit phases and durable state (`AgentPhase` enum, `AgentRun` dataclass)
+- [x] The runtime can start, report status, resume, and cancel a run
+- [x] Task ledger integration is automatic rather than manual
+- [x] Multi-agent execution is hidden behind the runtime instead of exposed as a separate primary workflow
+- [x] Restarting Nala does not destroy the current agent run state (persists to `.nala/agent/current_run.json`)
 
 ## Estimated Complexity
 

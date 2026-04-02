@@ -94,11 +94,13 @@ def _suggest_actions(
     suggestions: list[str] = []
 
     if file_count > 0 and symbol_count > 0:
-        suggestions.append("/analyze — run code analysis across all perspectives")
+        suggestions.append("/agent hotspot — find high-value improvement targets")
 
     if git_available and uncommitted > 0:
         plural = "s" if uncommitted != 1 else ""
-        suggestions.append(f"/diff — review {uncommitted} uncommitted change{plural}")
+        suggestions.append(
+            f"/agent review — review {uncommitted} uncommitted change{plural}",
+        )
 
     if has_sessions:
         suggestions.append("/session list — resume a previous session")
