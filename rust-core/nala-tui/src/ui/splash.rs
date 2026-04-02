@@ -94,6 +94,20 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(theme::GRAY),
     )));
 
+    if app.stats.total_files > 0 || app.stats.total_functions > 0 {
+        let mut parts: Vec<String> = Vec::new();
+        if app.stats.total_files > 0 {
+            parts.push(format!("{} files", app.stats.total_files));
+        }
+        if app.stats.total_functions > 0 {
+            parts.push(format!("{} symbols", app.stats.total_functions));
+        }
+        lines.push(Line::from(Span::styled(
+            format!("  Indexed: {}", parts.join(", ")),
+            Style::default().fg(theme::MAGENTA),
+        )));
+    }
+
     if let Some(intel) = &app.startup_intel {
         if !intel.project_types.is_empty() {
             let types = intel.project_types.join(", ");
@@ -117,6 +131,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(Span::styled(
                 git_line,
                 Style::default().fg(theme::GREEN),
+            )));
+        }
+
+        if !intel.entry_points.is_empty() {
+            let ep = intel.entry_points.iter().take(3)
+                .cloned().collect::<Vec<_>>().join(", ");
+            lines.push(Line::from(Span::styled(
+                format!("  Entry: {}", ep),
+                Style::default().fg(theme::GRAY),
             )));
         }
 

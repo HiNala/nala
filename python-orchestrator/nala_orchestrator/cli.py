@@ -80,6 +80,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 
 from .agents.action_executor import ActionExecutor
@@ -126,10 +127,14 @@ sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
 
 VERSION = "0.1.0"
 
+_write_lock = threading.Lock()
+
 
 def write_response(data: dict) -> None:
-    """Write a JSON-lines response to stdout."""
-    print(json.dumps(data), flush=True)
+    """Write a JSON-lines response to stdout (thread-safe)."""
+    line = json.dumps(data)
+    with _write_lock:
+        print(line, flush=True)
 
 
 def _ensure_brain_scaffold(root: Path) -> None:
@@ -408,9 +413,10 @@ async def handle_request(
                         f" indexed in {elapsed:.1f}s."
                     )
                     write_response({
-                        "id": req_id, "type": "chunk", "text": msg,
+                        "id": req_id,
+                        "type": "system_message",
+                        "text": msg,
                     })
-                    write_response({"id": req_id, "type": "done"})
                 except TimeoutError:
                     log.error(
                         "index_context: chunk build timed out (120s)",
@@ -670,15 +676,13 @@ async def handle_request(
             full_text: list[str] = []
             async for chunk in agent.stream_query_with_actions(text):
                 full_text.append(chunk)
+                write_response({
+                    "id": req_id, "type": "chunk", "text": chunk,
+                })
 
             assembled = "".join(full_text)
-            cleaned, actions = extract_actions(assembled)
-            if not cleaned.strip() and actions:
-                cleaned = (
-                    f"Prepared {len(actions)} proposed action(s). "
-                    "Review the diff previews below before applying them."
-                )
-            _stream_text(req_id, cleaned)
+            _cleaned, actions = extract_actions(assembled)
+            write_response({"id": req_id, "type": "done"})
             for action in actions:
                 _pending_actions[action.action_id] = action
                 executor = _get_action_executor(root)

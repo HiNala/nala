@@ -140,6 +140,14 @@ impl App {
             "/tree" | "/files" => {
                 self.show_file_tree();
             }
+            "/read" => {
+                let path = parts.get(1).copied().unwrap_or("").trim().to_string();
+                if path.is_empty() {
+                    self.push_message(Message::error("Usage: /read <file_path>"));
+                } else {
+                    self.read_file(path);
+                }
+            }
             _ => {
                 self.push_message(Message::error(format!(
                     "Unknown command: {}. Type /help.",
@@ -205,6 +213,7 @@ impl App {
             "  /brain review-diff     — review current git diff\n",
             "  /brain verify          — run quick verification analysis\n",
             "  /brain status          — show doctor + task + team status\n",
+            "  /read <file>           — display a file's contents in the chat\n",
             "  /tree                  — show project file tree\n",
             "  /doctor                — environment and readiness diagnostics\n",
             "  /clear                 — clear message log\n",
@@ -274,6 +283,58 @@ impl App {
             if is_dir {
                 let ext = if is_last { "    " } else { "│   " };
                 Self::walk_tree(&entry.path(), &format!("{prefix}{ext}"), skip, lines, depth + 1, max_lines);
+            }
+        }
+    }
+
+    fn read_file(&mut self, path: String) {
+        let abs = if Path::new(&path).is_absolute() {
+            PathBuf::from(&path)
+        } else {
+            self.project_root.join(&path)
+        };
+        if !abs.exists() {
+            self.push_message(Message::error(format!(
+                "File not found: {}",
+                abs.display()
+            )));
+            return;
+        }
+        if abs.is_dir() {
+            self.push_message(Message::error(format!(
+                "{} is a directory. Use /tree to browse.",
+                path
+            )));
+            return;
+        }
+        match std::fs::read_to_string(&abs) {
+            Ok(content) => {
+                let line_count = content.lines().count();
+                let display = abs
+                    .strip_prefix(&self.project_root)
+                    .unwrap_or(&abs)
+                    .display();
+                let truncated = if line_count > 200 {
+                    let first_200: String = content.lines().take(200)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!(
+                        "**{}** ({} lines, showing first 200)\n```\n{}\n```\n\n... truncated ({} more lines)",
+                        display, line_count, first_200, line_count - 200,
+                    )
+                } else {
+                    format!(
+                        "**{}** ({} lines)\n```\n{}\n```",
+                        display, line_count, content,
+                    )
+                };
+                self.push_message(Message::assistant(truncated));
+            }
+            Err(e) => {
+                self.push_message(Message::error(format!(
+                    "Cannot read {}: {}",
+                    path, e
+                )));
             }
         }
     }

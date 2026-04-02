@@ -10,9 +10,9 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 
 - **Instant codebase scanning** — hash-based change detection on 170+ file projects in < 0.05s
 - **Full Tree-sitter indexing** — extracts functions, classes, imports across Rust, Python, JS/TS, Go
-- **RAG-powered code context** — chunks every indexed file, retrieves relevant code via BM25 (+ optional vector embeddings), injects into every LLM query
+- **RAG-powered code context** — chunks every indexed file, retrieves relevant code via BM25 (+ optional vector embeddings), injects up to 12k tokens of context per query
 - **Real-time streaming** — true token-by-token streaming from OpenAI, Anthropic, Google, and Ollama
-- **Markdown rendering** — AI responses display with **bold**, `inline code`, ```code blocks```, headings, and bullet points
+- **Markdown rendering** — AI responses display with **bold**, `inline code`, ```code blocks```, headings, bullet points, numbered lists, and horizontal rules
 - **Custom TUI** with themed panels, branded top bar, file tree, session history, progress gauge
 - **Python AI bridge** — streams LLM responses via IPC with project structure and file tree awareness
 - **LSP integration** — go-to-definition, find-references, hover, live diagnostics
@@ -120,6 +120,7 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `/brain review-diff` | Review current git diff via AI bridge |
 | `/branch` / `/diff` / `/status` | Repo-aware git summaries inside TUI |
 | `/tree` / `/files` | Show project file tree |
+| `/read <file>` | Display file contents in the chat |
 | `/session` | List past sessions |
 | `/quit` | Exit |
 | *Any other text* | Ask the AI assistant |

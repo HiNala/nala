@@ -841,6 +841,16 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 .to_string();
             let _ = bg_tx.send(BackgroundEvent::AssistantError(text)).await;
         }
+        "system_message" => {
+            let text = msg
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !text.is_empty() {
+                let _ = bg_tx.send(BackgroundEvent::SystemMessage(text)).await;
+            }
+        }
         "proposed_action" => {
             let action_id = msg.get("action_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let action_type = msg.get("action_type").and_then(|v| v.as_str()).unwrap_or("edit").to_string();

@@ -222,8 +222,8 @@ class AgentOrchestrator:
         if self._embedder is None or not self._embedder.is_ready():
             return "(index not yet available)"
         from ..chunking.assembler import ContextAssembler
-        chunks = self._embedder.retrieve(query, top_k=10)
-        assembled = ContextAssembler().assemble(chunks, token_budget=4000)
+        chunks = self._embedder.retrieve(query, top_k=20)
+        assembled = ContextAssembler().assemble(chunks, token_budget=12_000)
         return assembled.text
 
     # ── Session management ─────────────────────────────────────────────────

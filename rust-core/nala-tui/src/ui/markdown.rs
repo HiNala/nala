@@ -93,11 +93,22 @@ pub fn render_markdown(text: &str, indent: &str) -> Vec<Line<'static>> {
             continue;
         }
 
-        // Bullet points
+        // Horizontal rule
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            lines.push(Line::from(Span::styled(
+                format!("{indent}  ────────────────────────"),
+                Style::default().fg(theme::DARK_GRAY),
+            )));
+            continue;
+        }
+
+        // Bullet points and numbered lists
         let (bullet_prefix, content) = if trimmed.starts_with("- ") {
-            (Some("  • "), &trimmed[2..])
+            (Some("  • ".to_string()), &trimmed[2..])
         } else if trimmed.starts_with("* ") {
-            (Some("  • "), &trimmed[2..])
+            (Some("  • ".to_string()), &trimmed[2..])
+        } else if let Some(num_content) = strip_numbered_prefix(trimmed) {
+            (Some(num_content.0), num_content.1)
         } else {
             (None, raw_line)
         };
@@ -111,7 +122,7 @@ pub fn render_markdown(text: &str, indent: &str) -> Vec<Line<'static>> {
             render_inline_spans(content, &mut spans);
         } else {
             spans.push(Span::raw(format!("{indent}  ")));
-            render_inline_spans(content, &mut spans);
+            render_inline_spans(content.trim_start(), &mut spans);
         }
 
         lines.push(Line::from(spans));
@@ -136,6 +147,25 @@ pub fn render_markdown(text: &str, indent: &str) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+/// Match `1. text`, `2. text`, etc. and return (prefix, remaining content).
+fn strip_numbered_prefix(line: &str) -> Option<(String, &str)> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 0 || i > 3 {
+        return None;
+    }
+    if bytes.get(i) == Some(&b'.') && bytes.get(i + 1) == Some(&b' ') {
+        let num = &line[..i];
+        let rest = &line[i + 2..];
+        Some((format!("  {num}. "), rest))
+    } else {
+        None
+    }
 }
 
 fn render_inline_spans(text: &str, out: &mut Vec<Span<'static>>) {

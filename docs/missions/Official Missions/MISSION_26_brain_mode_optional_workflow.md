@@ -8,6 +8,12 @@ Brain Mode is not an always-on daemon. It is an explicit, user-invoked workflow 
 
 Nala already has strong primitives (index, graph, perspectives, sessions, action mode, task ledger), but they are exposed as separate commands. This mission unifies those capabilities into one coherent objective-first workflow.
 
+## Naming note
+
+`/brain` is the baseline entrypoint introduced in this mission batch, but it is not intended to remain the long-term public command.
+
+The next mission set consolidates the user-facing workflow under `/agent` so the product has one clear autonomous-workflow entrypoint instead of a growing set of overlapping slash commands.
+
 ## North Star
 
 When a user invokes Brain Mode, Nala should behave like a careful senior engineer:
@@ -72,7 +78,8 @@ This establishes persistent memory/rules placeholders for Brain runs.
 
 ## Next milestones
 
-1. Promote Brain lifecycle into structured statuses (`planned`, `approved`, `executing`, `verifying`, `done`).
-2. Add review checkpoint UI before apply.
-3. Add command recipes for verify phase per detected repo type.
-4. Add blast-radius report from graph before change execution.
+1. Rename the public command surface from `/brain` to `/agent` and consolidate overlapping slash commands.
+2. Promote Brain lifecycle into structured statuses (`planned`, `approved`, `executing`, `verifying`, `done`).
+3. Add review checkpoint UI before apply.
+4. Add command recipes for verify phase per detected repo type.
+5. Add blast-radius report from graph before change execution.

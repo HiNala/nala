@@ -16,8 +16,10 @@ from dataclasses import dataclass
 
 from .splitter import Chunk
 
-# Conservative token budget leaving room for conversation history + response.
-DEFAULT_TOKEN_BUDGET = 4_000
+# Token budget for retrieved context. Models like GPT-4o (128k) and Claude (200k)
+# can handle generous context; 12k gives room for ~50 code chunks alongside
+# conversation history, system prompt, and response.
+DEFAULT_TOKEN_BUDGET = 12_000
 # Approximate characters per token (code skews denser than prose).
 CHARS_PER_TOKEN = 4
 

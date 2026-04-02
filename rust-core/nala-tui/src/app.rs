@@ -127,6 +127,7 @@ pub enum BackgroundEvent {
     AssistantChunk(String),
     AssistantDone,
     AssistantError(String),
+    SystemMessage(String),
     SessionReplaced {
         text: String,
     },
@@ -839,6 +840,9 @@ impl App {
                 }
                 self.push_message(Message::error(assistant_error_message(&e)));
             }
+            BackgroundEvent::SystemMessage(text) => {
+                self.push_message(Message::system(text));
+            }
             BackgroundEvent::SessionReplaced { text } => {
                 self.mode = AppMode::Ready;
                 self.streaming_response = None;
@@ -1074,6 +1078,7 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/brain status",
     "/tree",
     "/files",
+    "/read",
     "/clear",
     "/quit",
 ];

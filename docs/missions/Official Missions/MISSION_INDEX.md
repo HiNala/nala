@@ -28,6 +28,16 @@ Then execute missions in order. Each mission is self-contained with objectives, 
 | MISSION_24_context_compression.md | 24 | Advanced compression pipeline for context efficiency |
 | MISSION_25_objective_driven_agent.md | 25 | Proactive startup, git awareness, task ledger, action pipeline |
 | MISSION_26_brain_mode_optional_workflow.md | 26 | Optional Brain Mode workflow, orchestration layer, scoped memory/rules |
+| MISSION_27_agent_command_surface_consolidation.md | 27 | Consolidate Brain Mode and overlapping commands under `/agent` |
+| MISSION_28_agent_control_plane.md | 28 | Build the central `/agent` runtime and durable control plane |
+| MISSION_29_agent_workbench_tui.md | 29 | Add an optional `/agent` workbench inside the TUI |
+| MISSION_30_agent_autonomous_workflow_loop.md | 30 | Implement the full `/agent` plan, approve, execute, verify, review loop |
+| MISSION_31_agent_skills_scoped_memory_and_safe_autonomy.md | 31 | Add durable `/agent` memory, skills, scoped rules, and safe autonomy |
+| MISSION_32_interpreter_orchestrator_worker_architecture.md | 32 | Formalize the interpreter, orchestrator, and worker runtime architecture |
+| MISSION_33_spawned_agent_terminals_and_attach_flow.md | 33 | Spawn worker terminals and support attach, inspect, and takeover flows |
+| MISSION_34_git_integration_worktrees_and_review_flow.md | 34 | Add deeper git integration, worktrees, and review-oriented SCM flows |
+| MISSION_35_web_search_and_live_research_grounding.md | 35 | Add bounded live web research and cited external context to `/agent` |
+| MISSION_36_human_in_loop_orchestration_experience.md | 36 | Design the full interpreter plus orchestrator plus worker human-in-the-loop UX |
 
 ## Execution Order
 
@@ -46,6 +56,10 @@ Then execute missions in order. Each mission is self-contained with objectives, 
 **Phase 6 - Objective-Driven Agent (Mission 25+)**: Transform Nala from a chat tool into a goal-oriented coding agent with proactive startup, git awareness, task tracking, and safe action pipelines.
 
 **Phase 6B - Brain Mode (Mission 26+)**: Add an optional deep-reasoning workflow with explicit plan/approve/execute/verify loops, scoped instructions, and durable Brain artifacts.
+
+**Phase 6C - `/agent` Unification (Missions 27-31)**: Rename Brain Mode to `/agent`, simplify the command surface, build a central control plane, expose a focused TUI workbench, implement the real autonomous workflow loop, and add durable skills, scoped memory, and safety boundaries.
+
+**Phase 6D - Terminal Orchestration (Missions 32-36)**: Formalize the interpreter-orchestrator-worker model, spawn and manage worker terminals, add deeper git/worktree support, integrate live web research, and design the full human-in-the-loop orchestration experience.
 
 ## Tech Stack Quick Reference
 
