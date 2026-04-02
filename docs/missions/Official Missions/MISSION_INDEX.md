@@ -27,6 +27,7 @@ Then execute missions in order. Each mission is self-contained with objectives, 
 | MISSION_23_multi_agent_orchestration.md | 23 | Multi-agent team coordination with task decomposition |
 | MISSION_24_context_compression.md | 24 | Advanced compression pipeline for context efficiency |
 | MISSION_25_objective_driven_agent.md | 25 | Proactive startup, git awareness, task ledger, action pipeline |
+| MISSION_26_brain_mode_optional_workflow.md | 26 | Optional Brain Mode workflow, orchestration layer, scoped memory/rules |
 
 ## Execution Order
 
@@ -43,6 +44,8 @@ Then execute missions in order. Each mission is self-contained with objectives, 
 **Phase 5B - Context & Memory (Missions 20-24)**: Add intelligent context management, hierarchical memory, session handoffs, multi-agent coordination, and compression. After these missions, Nala maintains deep continuity across sessions.
 
 **Phase 6 - Objective-Driven Agent (Mission 25+)**: Transform Nala from a chat tool into a goal-oriented coding agent with proactive startup, git awareness, task tracking, and safe action pipelines.
+
+**Phase 6B - Brain Mode (Mission 26+)**: Add an optional deep-reasoning workflow with explicit plan/approve/execute/verify loops, scoped instructions, and durable Brain artifacts.
 
 ## Tech Stack Quick Reference
 

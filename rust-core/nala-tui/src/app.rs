@@ -8,7 +8,9 @@
 //! and the action confirmation workflow in `actions.rs`.
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use ratatui::{DefaultTerminal, Frame};
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -200,7 +202,10 @@ pub struct App {
     pub context_total_tokens: usize,
     pub context_effective_limit: usize,
     pub scroll_offset: usize,
+    pub scroll_locked_to_bottom: bool,
     pub tab_index: Option<usize>,
+    pub saved_input: Option<String>,
+    pub last_area_height: u16,
     pub dashboard_process: Option<Child>,
     pub dashboard_port: Option<u16>,
     pub dashboard_default_port: u16,
@@ -331,7 +336,10 @@ impl App {
             context_total_tokens: 0,
             context_effective_limit: 0,
             scroll_offset: 0,
+            scroll_locked_to_bottom: true,
             tab_index: None,
+            saved_input: None,
+            last_area_height: 30,
             dashboard_process: None,
             dashboard_port: None,
             dashboard_default_port,
@@ -347,7 +355,9 @@ impl App {
             let drain = self.messages.len() - MAX_MESSAGES;
             self.messages.drain(0..drain);
         }
-        self.scroll_offset = 0;
+        if self.scroll_locked_to_bottom {
+            self.scroll_offset = 0;
+        }
     }
 
     pub(crate) fn refresh_context_usage(&self) {
@@ -368,9 +378,17 @@ impl App {
 
     pub async fn run(&mut self) -> Result<()> {
         let mut terminal = ratatui::init();
+        crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::EnableMouseCapture
+        )?;
         self.start_python_bridge().await;
         let result = self.event_loop(&mut terminal).await;
         self.cleanup_dashboard_process();
+        crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableMouseCapture
+        )?;
         ratatui::restore();
         result
     }
@@ -420,8 +438,31 @@ impl App {
     // ── Event handling ─────────────────────────────────────────────────────
 
     fn handle_event(&mut self, event: Event) {
-        if let Event::Key(key) = event {
-            self.handle_key(key);
+        match event {
+            Event::Key(key) => self.handle_key(key),
+            Event::Mouse(mouse) => self.handle_mouse(mouse),
+            Event::Resize(_, h) => {
+                self.last_area_height = h;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_offset = self.scroll_offset.saturating_add(3);
+                self.scroll_locked_to_bottom = false;
+            }
+            MouseEventKind::ScrollDown => {
+                if self.scroll_offset > 0 {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                }
+                if self.scroll_offset == 0 {
+                    self.scroll_locked_to_bottom = true;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -522,15 +563,33 @@ impl App {
             }
             Home => self.cursor_pos = 0,
             End => self.cursor_pos = self.input.len(),
-            PageUp => self.scroll_offset = self.scroll_offset.saturating_add(10),
-            PageDown => self.scroll_offset = self.scroll_offset.saturating_sub(10),
+            PageUp => {
+                self.scroll_offset = self.scroll_offset.saturating_add(10);
+                self.scroll_locked_to_bottom = false;
+            }
+            PageDown => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(10);
+                if self.scroll_offset == 0 {
+                    self.scroll_locked_to_bottom = true;
+                }
+            }
             Up => self.history_up(),
             Down => self.history_down(),
             Esc => {
-                self.input.clear();
-                self.cursor_pos = 0;
-                self.history_idx = None;
-                self.tab_index = None;
+                if self.mode == AppMode::Analyzing {
+                    self.mode = AppMode::Ready;
+                    self.streaming_response = None;
+                    self.push_message(Message {
+                        kind: MessageKind::System,
+                        text: "Request cancelled.".to_string(),
+                    });
+                } else {
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                    self.history_idx = None;
+                    self.saved_input = None;
+                    self.tab_index = None;
+                }
             }
             _ => {}
         }
@@ -539,6 +598,9 @@ impl App {
     fn history_up(&mut self) {
         if self.history.is_empty() {
             return;
+        }
+        if self.history_idx.is_none() {
+            self.saved_input = Some(self.input.clone());
         }
         let new_idx = match self.history_idx {
             None => self.history.len() - 1,
@@ -555,8 +617,8 @@ impl App {
             None => {}
             Some(i) if i + 1 >= self.history.len() => {
                 self.history_idx = None;
-                self.input.clear();
-                self.cursor_pos = 0;
+                self.input = self.saved_input.take().unwrap_or_default();
+                self.cursor_pos = self.input.len();
             }
             Some(i) => {
                 self.history_idx = Some(i + 1);
@@ -573,6 +635,7 @@ impl App {
         }
         self.history.push(input.clone());
         self.history_idx = None;
+        self.saved_input = None;
         self.input.clear();
         self.cursor_pos = 0;
 
@@ -974,6 +1037,12 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/task status",
     "/task list",
     "/task done",
+    "/brain",
+    "/brain investigate",
+    "/brain hotspot",
+    "/brain review-diff",
+    "/brain verify",
+    "/brain status",
     "/clear",
     "/quit",
 ];

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
@@ -10,6 +11,10 @@ from .provider import BaseLLMProvider, LLMMessage, LLMResponse
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
 
+log = logging.getLogger("nala.openai")
+
+_TIMEOUT_SECONDS = 90
+
 
 class OpenAIProvider(BaseLLMProvider):
     """Provider for OpenAI's GPT models."""
@@ -17,9 +22,15 @@ class OpenAIProvider(BaseLLMProvider):
     def __init__(self, config: Config) -> None:
         super().__init__(config)
         try:
+            import httpx
             import openai
+
             self._client = openai.AsyncOpenAI(
-                api_key=config.openai_api_key or ""
+                api_key=config.openai_api_key or "",
+                timeout=httpx.Timeout(
+                    _TIMEOUT_SECONDS,
+                    connect=15.0,
+                ),
             )
         except ImportError as e:
             raise ImportError(
@@ -35,13 +46,21 @@ class OpenAIProvider(BaseLLMProvider):
         all_messages = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend({"role": m.role, "content": m.content} for m in messages)
+        all_messages.extend(
+            {"role": m.role, "content": m.content} for m in messages
+        )
 
+        log.debug(
+            "OpenAI request: model=%s, messages=%d, max_tokens=%d",
+            self.model, len(all_messages), max_tokens,
+        )
         response = await self._client.chat.completions.create(
             model=self.model,
             messages=all_messages,
             max_tokens=max_tokens,
         )
+        log.debug("OpenAI response received, finish_reason=%s",
+                   response.choices[0].finish_reason)
 
         content = response.choices[0].message.content or ""
         usage = response.usage
@@ -60,16 +79,25 @@ class OpenAIProvider(BaseLLMProvider):
         system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
-        # The direct OpenAI streaming path can hang intermittently on Windows
-        # when used behind the JSON-lines subprocess bridge. Reuse the stable
-        # non-streaming call and yield the response in small chunks so the TUI
-        # still renders progressively.
-        response = await self.chat(
-            messages=messages,
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-        )
+        import asyncio
+
+        log.debug("stream_chat starting (non-stream with chunking)")
+        try:
+            response = await asyncio.wait_for(
+                self.chat(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    max_tokens=max_tokens,
+                ),
+                timeout=_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            log.error("OpenAI request timed out after %ds", _TIMEOUT_SECONDS)
+            yield f"Request timed out after {_TIMEOUT_SECONDS}s. Check your network connection."
+            return
+
         content = response.content or ""
+        log.debug("stream_chat got %d chars, chunking", len(content))
         chunk_size = 160
         for start in range(0, len(content), chunk_size):
             yield content[start : start + chunk_size]

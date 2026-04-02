@@ -85,13 +85,23 @@ class Config(BaseModel):
         root = project_root or Path.cwd()
 
         home_env = Path.home() / ".nala" / ".env"
-        project_env = root / ".env"
 
         if home_env.exists():
             load_dotenv(home_env, override=False)
-        if project_env.exists():
-            # Project-local config should override ~/.nala/.env for testing.
-            load_dotenv(project_env, override=True)
+        # Walk upward from project_root so launching from a subdirectory
+        # (for example `rust-core`) still picks up repo-level `.env`.
+        candidate_envs: list[Path] = []
+        cursor = root.resolve()
+        while True:
+            env_path = cursor / ".env"
+            if env_path.exists():
+                candidate_envs.append(env_path)
+            parent = cursor.parent
+            if parent == cursor:
+                break
+            cursor = parent
+        for env_path in reversed(candidate_envs):
+            load_dotenv(env_path, override=True)
 
         def _int(key: str, default: int) -> int:
             raw = os.environ.get(key)

@@ -133,6 +133,10 @@ impl App {
                     }
                 }
             }
+            "/brain" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.handle_brain_command(args);
+            }
             _ => {
                 self.push_message(Message::error(format!(
                     "Unknown command: {}. Type /help.",
@@ -192,6 +196,12 @@ impl App {
             "  /task status           — show current task state\n",
             "  /task list             — list all tasks in this session\n",
             "  /task done [summary]   — mark current task complete\n",
+            "  /brain                 — brain mode help and quick actions\n",
+            "  /brain investigate <objective> — create task + start deep run\n",
+            "  /brain hotspot         — run quick hotspot triage\n",
+            "  /brain review-diff     — review current git diff\n",
+            "  /brain verify          — run quick verification analysis\n",
+            "  /brain status          — show doctor + task + team status\n",
             "  /doctor                — environment and readiness diagnostics\n",
             "  /clear                 — clear message log\n",
             "  /help                  — show this help\n",
@@ -1053,6 +1063,66 @@ impl App {
                 let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
             }
         });
+    }
+
+    fn handle_brain_command(&mut self, args: &str) {
+        let mut parts = args.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+
+        match sub {
+            "" | "help" => {
+                self.push_message(Message::assistant(
+                    "Brain Mode (optional deep workflow)\n\
+                     \n\
+                     Commands:\n\
+                     - /brain investigate <objective> : create tracked task and start team run\n\
+                     - /brain hotspot                 : run quick hotspot triage\n\
+                     - /brain review-diff             : inspect current git diff\n\
+                     - /brain verify                  : run quick verification analysis\n\
+                     - /brain status                  : doctor + task + team status snapshot\n\
+                     \n\
+                     Workflow: investigate -> review-diff -> verify -> iterate.",
+                ));
+            }
+            "investigate" | "refactor" | "work" => {
+                if rest.is_empty() {
+                    self.push_message(Message::error(
+                        "Usage: /brain investigate <objective>",
+                    ));
+                    return;
+                }
+                self.push_message(Message::system(format!(
+                    "Brain mode started for objective: {}",
+                    rest
+                )));
+                self.task_create(rest.to_string());
+                self.team_start(rest.to_string());
+            }
+            "hotspot" => {
+                self.push_message(Message::system(
+                    "Brain mode: running quick hotspot triage...",
+                ));
+                self.run_perspectives("quick".to_string());
+            }
+            "review-diff" => self.git_diff(),
+            "verify" => {
+                self.push_message(Message::system(
+                    "Brain mode: running quick verification analysis...",
+                ));
+                self.run_perspectives("quick".to_string());
+            }
+            "status" => {
+                self.doctor();
+                self.task_status();
+                self.team_status();
+            }
+            _ => {
+                self.push_message(Message::error(
+                    "Unknown /brain subcommand. Use /brain help.",
+                ));
+            }
+        }
     }
 }
 

@@ -17,6 +17,7 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 - **Session management** — save, resume, and review past analysis sessions
 - **Action mode** — `/act` to ask AI to propose file edits with diff preview + y/n confirmation
 - **Context window management** — `/context` usage, `/compact` compaction with handoff docs
+- **Brain Mode (optional)** — `/brain` workflow for deeper objective-driven investigation, triage, and verification
 
 ### Terminal UI Highlights
 
@@ -26,6 +27,7 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 - File tree panel with language-colored icons and scanner-aligned skip rules
 - Visual progress gauge during indexing
 - Ctrl+Left/Right word jump, Ctrl+W delete-word, mouse click support
+- Mouse wheel message scrolling, PgUp/PgDn scroll, and improved prompt history navigation (`↑`/`↓`)
 - Live LSP diagnostics (error/warning counts in status bar and top bar)
 - Diff confirmation view with color-coded add/remove/context lines
 
@@ -103,6 +105,14 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `/refs <file>:<line>:<col>` | Find references lookup |
 | `/hover <file>:<line>:<col>` | Hover information lookup |
 | `/diag` | Show LSP diagnostics summary (errors/warnings) |
+| `/act <instruction>` | Ask AI to propose structured file edits (with preview/confirm) |
+| `/task <objective>` | Create and track a task in the session ledger |
+| `/task status` / `/task list` / `/task done` | Inspect and complete tracked tasks |
+| `/brain` | Show optional Brain Mode workflow help |
+| `/brain investigate <objective>` | Start deep objective workflow (task + team run) |
+| `/brain hotspot` / `/brain verify` | Run quick triage / verification analysis |
+| `/brain review-diff` | Review current git diff via AI bridge |
+| `/branch` / `/diff` / `/status` | Repo-aware git summaries inside TUI |
 | `/session` | List past sessions |
 | `/quit` | Exit |
 | *Any other text* | Ask the AI assistant |
@@ -120,6 +130,7 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `Esc` | Clear current input |
 | `Ctrl+C` / `Ctrl+Q` | Quit |
 | Mouse click | Open file panel, interact with UI |
+| Mouse wheel / `PgUp` / `PgDn` | Scroll message history |
 
 ---
 
@@ -167,6 +178,7 @@ If you haven't run the setup script, you can run the binary directly:
 
 - Command not found after setup: open a **new terminal** so PATH updates are loaded.
 - Wrong Python interpreter: set `NALA_PYTHON` to your `.venv` Python executable.
+- AI says provider is missing despite `.env`: restart Nala after key changes. Config now resolves `.env` from parent dirs (for launches from subfolders like `rust-core`).
 - Dashboard startup fails: re-run setup (`scripts/setup.sh` or `scripts/setup.ps1`) to install `fastapi` and `uvicorn`.
 - No symbols after `scan`: run `index` (index now reparses discovered files even when scan cache is warm).
 
@@ -198,7 +210,7 @@ nala/
 │       └── agents/         LLM query orchestration
 ├── dashboard/              Optional FastAPI + D3.js web dashboard
 ├── scripts/                Setup and benchmark scripts
-└── docs/missions/          Complete build plan (24 missions)
+└── docs/missions/          Complete build plan (26 missions)
 ```
 
 See [docs/missions/MISSION_00_MASTER_PLAN.md](docs/missions/MISSION_00_MASTER_PLAN.md) for the full vision.
@@ -220,15 +232,16 @@ Nala supports four providers. Set `LLM_PROVIDER` in `.env`:
 
 ## Mission Plan
 
-The build is structured as 19 missions. Each mission is in `docs/missions/`.
+The build is structured through Mission 26 (and growing). Each mission is in `docs/missions/`.
 
 | Phase | Missions | Focus |
 |-------|---------|-------|
 | Foundation | 01-06 | Setup, indexing, TUI, LSP, PyO3 |
-| Analysis | 07-09 | Neo4j graph, perspectives, reports |
-| Agent Actions | 10-13 | Sessions, missions, inline edits |
-| Polish | 14-16 | Dashboard, review, what's next |
-| Docs | 17-19 | Architecture, data flow, extensions |
+| Analysis | 07-10 | Neo4j graph, perspectives, reports, sessions |
+| Agent Actions | 11-16 | Missions, LLM integration, inline edits, polish |
+| Docs | 17-19 | Architecture, data flow, extension docs |
+| Context & Memory | 20-24 | Context mgmt, memory, handoff, multi-agent, compression |
+| Objective Agent | 25-26 | Objective-driven workflows and optional Brain Mode |
 
 ---
 

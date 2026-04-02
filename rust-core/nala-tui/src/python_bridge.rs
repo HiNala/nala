@@ -520,6 +520,12 @@ async fn bridge_task(
                     None => break, // All PythonBridge handles dropped
                     Some(req) => {
                         let id = next_id();
+                        let req_type_label = match &req {
+                            BridgeRequest::Query { .. } => "query",
+                            BridgeRequest::IndexContext { .. } => "index_context",
+                            _ => "other",
+                        };
+                        eprintln!("[bridge] SEND id={id} type={req_type_label}");
                         let msg = match req {
                             BridgeRequest::Query { text, project_root } => json!({
                                 "id": id,
@@ -819,6 +825,8 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
     };
 
     let msg_type = msg.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    let msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+    eprintln!("[bridge] RECV id={msg_id} type={msg_type}");
 
     match msg_type {
         "chunk" => {
@@ -973,13 +981,12 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
             let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
         }
         "ok" => {
-            let text = msg
-                .get("text")
-                .and_then(|t| t.as_str())
-                .unwrap_or("Done.")
-                .to_string();
-            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
-            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+            if let Some(text) = msg.get("text").and_then(|t| t.as_str()) {
+                if !text.is_empty() {
+                    let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text.to_string())).await;
+                    let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+                }
+            }
         }
         "startup_intelligence" => {
             let project_types: Vec<String> = msg.get("project_types")

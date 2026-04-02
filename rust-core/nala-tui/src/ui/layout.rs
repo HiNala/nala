@@ -235,7 +235,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
     if show_scroll_hint && offset > 0 {
         let hint = Line::from(Span::styled(
-            format!("  ── {} more lines (PgUp to scroll) ──", offset),
+            format!("  ── {} more lines (PgUp/PgDn or mouse wheel) ──", offset),
             Style::default().fg(theme::GRAY),
         ));
         frame.render_widget(

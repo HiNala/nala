@@ -132,6 +132,74 @@ def write_response(data: dict) -> None:
     print(json.dumps(data), flush=True)
 
 
+def _ensure_brain_scaffold(root: Path) -> None:
+    """Create durable Brain Mode artifacts if they do not exist yet."""
+    brain_dir = root / ".nala" / "brain"
+    scopes_dir = brain_dir / "scopes"
+    brain_dir.mkdir(parents=True, exist_ok=True)
+    scopes_dir.mkdir(parents=True, exist_ok=True)
+
+    project_brief = brain_dir / "project-brief.md"
+    if not project_brief.exists():
+        project_brief.write_text(
+            (
+                "# Project Brief\n\n"
+                "## Architecture\n"
+                "- Fill in core modules and boundaries.\n\n"
+                "## Canonical Commands\n"
+                "- Build:\n"
+                "- Test:\n"
+                "- Lint:\n\n"
+                "## Definitions of Done\n"
+                "- Tests pass\n"
+                "- Lint clean\n"
+                "- User-visible behavior verified\n\n"
+                "## Risky Areas\n"
+                "- Fill in critical subsystems and constraints.\n"
+            ),
+            encoding="utf-8",
+        )
+
+    if (root / "rust-core").exists():
+        rust_scope = scopes_dir / "rust-core.md"
+        if not rust_scope.exists():
+            rust_scope.write_text(
+                (
+                    "# Scope: rust-core\n\n"
+                    "- Keep TUI interactions low-latency.\n"
+                    "- Prefer minimal rendering-side allocations.\n"
+                    "- Validate with `cargo check` before shipping changes.\n"
+                ),
+                encoding="utf-8",
+            )
+
+    if (root / "python-orchestrator").exists():
+        py_scope = scopes_dir / "python-orchestrator.md"
+        if not py_scope.exists():
+            py_scope.write_text(
+                (
+                    "# Scope: python-orchestrator\n\n"
+                    "- Preserve IPC responsiveness (never block event loop).\n"
+                    "- Keep request handlers deterministic and explicit.\n"
+                    "- Validate with `ruff check` and targeted smoke tests.\n"
+                ),
+                encoding="utf-8",
+            )
+
+    if (root / "dashboard").exists():
+        dashboard_scope = scopes_dir / "dashboard.md"
+        if not dashboard_scope.exists():
+            dashboard_scope.write_text(
+                (
+                    "# Scope: dashboard\n\n"
+                    "- Keep startup lightweight and resilient.\n"
+                    "- Prefer read-only operations unless explicitly requested.\n"
+                    "- Verify route health before release.\n"
+                ),
+                encoding="utf-8",
+            )
+
+
 def _get_action_executor(root: Path, *, reset: bool = False) -> ActionExecutor:
     """Return the shared action executor for the active coding session."""
     global _action_executor
@@ -249,7 +317,6 @@ async def handle_request(
         total_files = req.get("total_files", 0)
         total_symbols = req.get("total_symbols", 0)
 
-        # Derive primary language from symbol frequency.
         symbols_raw_all: list[dict] = req.get("symbols", [])
         lang_counts: dict[str, int] = {}
         for s in symbols_raw_all:
@@ -268,7 +335,8 @@ async def handle_request(
             primary_language=primary_lang,
         )
 
-        # Rebuild chunk index if stale.
+        write_response({"id": req_id, "type": "ok"})
+
         global _embedder
         symbols_raw: list[dict] = req.get("symbols", [])
         if symbols_raw:
@@ -288,31 +356,84 @@ async def handle_request(
                 )
                 for s in normalised_symbols
             ]
-            if _embedder is None or _embedder.needs_rebuild(total_files):
-                _embedder = Embedder(str(root))
-                splitter = ChunkSplitter()
-                chunks = splitter.split_all(str(root), syms)
-                _embedder.build(chunks)
-                agent.set_embedder(_embedder)
 
-            # Best-effort graph sync for graph-backed perspectives.
-            try:
-                from .graph.builder import GraphBuilder
-                from .graph.connection import GraphConnection
+            async def _background_build(
+                root_str: str,
+                syms_list: list,
+                total: int,
+                normalised: list[dict],
+            ) -> None:
+                global _embedder
+                import time as _t
 
-                conn = GraphConnection(config)
-                if conn.connect():
-                    builder = GraphBuilder(conn)
-                    builder.ensure_schema()
-                    await asyncio.to_thread(
-                        builder.populate_from_index,
-                        json.dumps({"symbols": normalised_symbols}, separators=(",", ":")),
+                if _embedder is not None and not _embedder.needs_rebuild(total):
+                    return
+
+                _t0 = _t.monotonic()
+                log.warning(
+                    "index_context: building chunks for %d symbols (background)",
+                    len(syms_list),
+                )
+                try:
+                    def _do_build() -> Embedder:
+                        t1 = _t.monotonic()
+                        emb = Embedder(root_str)
+                        splitter = ChunkSplitter()
+                        chunks = splitter.split_all(root_str, syms_list)
+                        t2 = _t.monotonic()
+                        log.warning(
+                            "split_all: %d chunks in %.1fs",
+                            len(chunks), t2 - t1,
+                        )
+                        emb.build(chunks)
+                        t3 = _t.monotonic()
+                        log.warning(
+                            "embedder.build: %.1fs (total %.1fs)",
+                            t3 - t2, t3 - t1,
+                        )
+                        return emb
+
+                    emb = await asyncio.wait_for(
+                        asyncio.to_thread(_do_build),
+                        timeout=120,
                     )
-                    conn.close()
-            except Exception as e:
-                log.debug("Graph sync skipped: %s", e)
+                    _embedder = emb
+                    agent.set_embedder(emb)
+                    elapsed = _t.monotonic() - _t0
+                    log.warning(
+                        "index_context: chunks built in %.1fs", elapsed,
+                    )
+                except TimeoutError:
+                    log.error(
+                        "index_context: chunk build timed out (120s)",
+                    )
+                except Exception as e:
+                    log.error("index_context: chunk build failed: %s", e)
 
-        write_response({"id": req_id, "type": "ok"})
+                try:
+                    from .graph.builder import GraphBuilder
+                    from .graph.connection import GraphConnection
+
+                    conn = GraphConnection(config)
+                    if conn.connect():
+                        builder = GraphBuilder(conn)
+                        builder.ensure_schema()
+                        await asyncio.to_thread(
+                            builder.populate_from_index,
+                            json.dumps(
+                                {"symbols": normalised},
+                                separators=(",", ":"),
+                            ),
+                        )
+                        conn.close()
+                except Exception as e:
+                    log.debug("Graph sync skipped: %s", e)
+
+            asyncio.create_task(
+                _background_build(
+                    str(root), syms, total_files, normalised_symbols,
+                ),
+            )
 
     # ── Natural language query (streaming) ────────────────────────────────
     elif req_type == "query":
@@ -320,11 +441,28 @@ async def handle_request(
         if not text:
             write_response({"id": req_id, "type": "error", "text": "Empty query"})
             return
+        import time as _time
+        _t0 = _time.monotonic()
+        log.warning("QUERY START id=%s text=%r", req_id, text[:60])
         try:
+            got_chunk = False
             async for chunk in agent.stream_query(text):
+                got_chunk = True
                 write_response({"id": req_id, "type": "chunk", "text": chunk})
             write_response({"id": req_id, "type": "done"})
+            _elapsed = _time.monotonic() - _t0
+            log.warning(
+                "QUERY DONE id=%s chunks=%s elapsed=%.1fs",
+                req_id, got_chunk, _elapsed,
+            )
+        except TimeoutError:
+            log.error("QUERY TIMEOUT id=%s", req_id)
+            write_response({
+                "id": req_id, "type": "error",
+                "text": "LLM request timed out. Check your network and API key.",
+            })
         except Exception as e:
+            log.exception("QUERY ERROR id=%s: %s", req_id, e)
             write_response({"id": req_id, "type": "error", "text": str(e)})
 
     # ── Run perspectives (streaming formatted report) ─────────────────────
@@ -945,6 +1083,7 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
     Runs until stdin closes (Rust process exits or sends EOF).
     """
     root = Path(project_root) if project_root else Path.cwd()
+    _ensure_brain_scaffold(root)
     config = Config.load(project_root=root)
     agent = AgentOrchestrator(config)
 
@@ -1005,8 +1144,7 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
             if not line:
                 continue
             req = json.loads(line)
-            # Serialize request handling to avoid interleaving streamed JSON-lines
-            # across concurrent tasks, which can corrupt the IPC contract.
+            log.warning("IPC RECV type=%s id=%s", req.get("type"), req.get("id"))
             await handle_request(req, agent, root, config)
         except json.JSONDecodeError as e:
             write_response({"type": "error", "text": f"JSON parse error: {e}"})
