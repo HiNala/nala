@@ -5,9 +5,10 @@
 
 mod constants;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use constants::{APP_DESCRIPTION, APP_NAME, APP_VERSION};
+use std::env;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -142,20 +143,7 @@ async fn run_dashboard(path: &std::path::Path, port: u16) -> Result<()> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(std::path::Path::new("."));
 
-    let status = std::process::Command::new("python")
-        .args([
-            "-m",
-            "uvicorn",
-            "dashboard.server:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            &port.to_string(),
-        ])
-        .env("DASHBOARD_PORT", port.to_string())
-        .env("NALA_PROJECT_ROOT", root_for_env)
-        .current_dir(dashboard_cwd)
-        .status();
+    let status = launch_dashboard_with_python(dashboard_cwd, &root_for_env, port);
 
     match status {
         Ok(s) if s.success() => Ok(()),
@@ -171,6 +159,97 @@ async fn run_dashboard(path: &std::path::Path, port: u16) -> Result<()> {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+fn launch_dashboard_with_python(
+    dashboard_cwd: &std::path::Path,
+    root_for_env: &str,
+    port: u16,
+) -> Result<std::process::ExitStatus> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(explicit) = env::var("NALA_PYTHON") {
+        if !explicit.trim().is_empty() {
+            candidates.push(PathBuf::from(explicit));
+        }
+    }
+
+    let repo_root = dashboard_cwd.to_path_buf();
+    #[cfg(windows)]
+    {
+        candidates.push(repo_root.join(".venv").join("Scripts").join("python.exe"));
+    }
+    #[cfg(not(windows))]
+    {
+        candidates.push(repo_root.join(".venv").join("bin").join("python"));
+    }
+
+    if let Ok(venv) = env::var("VIRTUAL_ENV") {
+        #[cfg(windows)]
+        {
+            candidates.push(PathBuf::from(&venv).join("Scripts").join("python.exe"));
+        }
+        #[cfg(not(windows))]
+        {
+            candidates.push(PathBuf::from(&venv).join("bin").join("python"));
+        }
+    }
+
+    #[cfg(windows)]
+    candidates.extend([PathBuf::from("python"), PathBuf::from("py")]);
+    #[cfg(not(windows))]
+    candidates.extend([PathBuf::from("python3"), PathBuf::from("python")]);
+
+    let mut last_err = None;
+    for python_cmd in candidates {
+        let mut cmd = std::process::Command::new(&python_cmd);
+        if python_cmd.file_name().and_then(|s| s.to_str()) == Some("py") {
+            cmd.args([
+                "-3",
+                "-m",
+                "uvicorn",
+                "dashboard.server:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &port.to_string(),
+            ]);
+        } else {
+            cmd.args([
+                "-m",
+                "uvicorn",
+                "dashboard.server:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &port.to_string(),
+            ]);
+        }
+
+        let status = cmd
+            .env("DASHBOARD_PORT", port.to_string())
+            .env("NALA_PROJECT_ROOT", root_for_env)
+            .current_dir(dashboard_cwd)
+            .status();
+
+        match status {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                last_err = Some((python_cmd, e));
+            }
+        }
+    }
+
+    if let Some((cmd, err)) = last_err {
+        Err(anyhow!(
+            "Failed to launch dashboard via Python command '{}': {}",
+            cmd.display(),
+            err
+        ))
+    } else {
+        Err(anyhow!("No Python command candidates were available"))
+    }
+    .with_context(|| "Dashboard launch failed for all Python runtime candidates")
+}
 
 fn init_logging(verbose: bool) {
     use tracing_subscriber::{fmt, EnvFilter};

@@ -53,6 +53,17 @@ If your system `python` is not the one with `nala_orchestrator` installed, set:
 NALA_PYTHON=/absolute/path/to/python
 ```
 
+### First-run smoke test
+
+```bash
+# From any project directory:
+hinala scan
+hinala index
+hinala dashboard --port 3000
+```
+
+The dashboard should open on `http://127.0.0.1:3000` and use the current directory as project root.
+
 ### Commands inside Nala
 
 | Command | Description |
@@ -61,6 +72,13 @@ NALA_PYTHON=/absolute/path/to/python
 | `/scan` | Scan project files (fast, hash-only) |
 | `/index` | Full index: parse + symbol extraction |
 | `/analyze` | Run analysis perspectives |
+| `/scope` | Show or set analysis scope |
+| `/scope <path>` | Analyze a specific subtree |
+| `/scope clear` | Reset scope to full project |
+| `/lsp status` | Show LSP runtime status |
+| `/def <file>:<line>:<col>` | Go-to-definition lookup |
+| `/refs <file>:<line>:<col>` | Find references lookup |
+| `/hover <file>:<line>:<col>` | Hover information lookup |
 | `/session` | List past sessions |
 | `/quit` | Exit |
 | *Any other text* | Ask the AI assistant |
@@ -73,6 +91,15 @@ NALA_PYTHON=/absolute/path/to/python
 | `Ctrl+E` | Toggle session panel |
 | `↑` / `↓` | Navigate command history |
 | `Ctrl+C` / `Ctrl+Q` | Quit |
+
+---
+
+## Troubleshooting
+
+- Command not found after setup: open a **new terminal** so PATH updates are loaded.
+- Wrong Python interpreter: set `NALA_PYTHON` to your `.venv` Python executable.
+- Dashboard startup fails: re-run setup (`scripts/setup.sh` or `scripts/setup.ps1`) to install `fastapi` and `uvicorn`.
+- No symbols after `scan`: run `index` (index now reparses discovered files even when scan cache is warm).
 
 ---
 

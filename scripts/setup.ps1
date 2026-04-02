@@ -76,6 +76,10 @@ Push-Location python-orchestrator
 Pop-Location
 Ok "Python orchestrator installed"
 
+Info "Installing dashboard runtime dependencies..."
+& .\.venv\Scripts\python -m pip install fastapi uvicorn --quiet
+Ok "Dashboard runtime dependencies installed"
+
 # ── Summary ────────────────────────────────────────────────────────────────
 
 Write-Host "`nSetup complete!" -ForegroundColor Green

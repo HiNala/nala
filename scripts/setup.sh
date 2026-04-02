@@ -75,6 +75,10 @@ info "Installing Python orchestrator..."
 (cd python-orchestrator && pip install -e . --quiet) || fail "Python install failed"
 ok "Python orchestrator installed"
 
+info "Installing dashboard runtime dependencies..."
+pip install fastapi uvicorn --quiet
+ok "Dashboard runtime dependencies installed"
+
 # ── Summary ────────────────────────────────────────────────────────────────
 
 echo ""
