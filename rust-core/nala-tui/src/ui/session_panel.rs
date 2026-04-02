@@ -1,54 +1,42 @@
 //! Session history panel (right side, Ctrl+E to toggle).
-//!
-//! Lists previous analysis sessions from `.nala/` directory.
+//! Terminal-native styling with simple border.
 
 use crate::app::App;
 use crate::ui::theme;
 use ratatui::{
     layout::Rect,
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem},
+    widgets::{Block, Borders, List, ListItem},
     Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let sessions = load_sessions(&app.project_root);
-    let title = if sessions.is_empty() {
-        " Sessions ".to_string()
-    } else {
-        format!(" Sessions ({}) ", sessions.len())
-    };
     let block = Block::default()
-        .title(Span::styled(title, theme::bold_accent()))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::BORDER_NORMAL))
-        .style(theme::base_style());
+        .title(Span::styled(" sessions ", Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD)))
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(theme::DARK_GRAY));
+
+    let sessions = load_sessions(&app.project_root);
     let items: Vec<ListItem> = if sessions.is_empty() {
         vec![
             ListItem::new(Line::from(Span::styled(
-                " No sessions yet.",
-                Style::default().fg(theme::FG_DIM),
-            ))),
-            ListItem::new(Line::from("")),
-            ListItem::new(Line::from(Span::styled(
-                " Run /analyze to",
-                Style::default().fg(theme::FG_DIM),
+                " no sessions yet",
+                Style::default().fg(theme::DARK_GRAY),
             ))),
             ListItem::new(Line::from(Span::styled(
-                " create a session.",
-                Style::default().fg(theme::FG_DIM),
+                " run /analyze",
+                Style::default().fg(theme::DARK_GRAY),
             ))),
         ]
     } else {
         sessions
             .into_iter()
             .map(|s| {
-                ListItem::new(Line::from(vec![
-                    Span::styled(" ◆ ", Style::default().fg(theme::ACCENT_SECONDARY)),
-                    Span::styled(s, Style::default().fg(theme::FG_SECONDARY)),
-                ]))
+                ListItem::new(Line::from(Span::styled(
+                    format!(" {}", s),
+                    Style::default().fg(theme::GRAY),
+                )))
             })
             .collect()
     };

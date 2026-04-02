@@ -8,7 +8,7 @@
 //! and the action confirmation workflow in `actions.rs`.
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{DefaultTerminal, Frame};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -179,15 +179,7 @@ impl App {
             cursor_pos: 0,
             history: Vec::new(),
             history_idx: None,
-            messages: vec![Message::system(
-                "Welcome to HiNala — terminal-first AI coding environment.\n\
-                 Quick start:\n\
-                 \x20 • Type a question to ask the AI\n\
-                 \x20 • /analyze  — run code analysis\n\
-                 \x20 • /act      — ask AI to edit code\n\
-                 \x20 • /help     — see all commands\n\
-                 \x20 • Ctrl+B    — toggle file tree",
-            )],
+            messages: Vec::new(),
             status_text: "Initializing...".to_string(),
             index_progress: None,
             stats: ProjectStats::default(),
@@ -221,10 +213,8 @@ impl App {
 
     pub async fn run(&mut self) -> Result<()> {
         let mut terminal = ratatui::init();
-        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
         self.start_python_bridge().await;
         let result = self.event_loop(&mut terminal).await;
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
         ratatui::restore();
         result
     }
@@ -243,9 +233,7 @@ impl App {
                 last_render = Instant::now();
             }
 
-            if self.mode == AppMode::Booting
-                && self.splash_start.elapsed() > Duration::from_millis(1500)
-            {
+            if self.mode == AppMode::Booting {
                 self.mode = AppMode::Ready;
             }
 
@@ -270,11 +258,7 @@ impl App {
     // ── Rendering ──────────────────────────────────────────────────────────
 
     fn render(&self, frame: &mut Frame) {
-        if self.mode == AppMode::Booting {
-            ui::splash::render(frame, self);
-        } else {
-            ui::layout::render(frame, self);
-        }
+        ui::layout::render(frame, self);
     }
 
     // ── Event handling ─────────────────────────────────────────────────────
@@ -282,29 +266,16 @@ impl App {
     fn handle_event(&mut self, event: Event) {
         match event {
             Event::Key(key) => self.handle_key(key),
-            Event::Resize(_, _) => {}
-            Event::Mouse(mouse) => self.handle_mouse(mouse),
             _ => {}
-        }
-    }
-
-    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
-        use crossterm::event::{MouseEventKind, MouseButton};
-        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-            if mouse.column < 5 && !self.panels.file_panel_open {
-                self.panels.file_panel_open = true;
-            }
-        }
-        if let MouseEventKind::ScrollUp = mouse.kind {
-            self.scroll_offset = self.scroll_offset.saturating_add(3);
-        }
-        if let MouseEventKind::ScrollDown = mouse.kind {
-            self.scroll_offset = self.scroll_offset.saturating_sub(3);
         }
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         use KeyCode::*;
+
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
