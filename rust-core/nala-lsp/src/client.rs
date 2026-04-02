@@ -13,10 +13,12 @@
 //! or `Ok(vec![])` without crashing. Nala degrades gracefully.
 
 use crate::config::{detect_server, LspServer};
-use crate::transport::LspTransport;
+use crate::diagnostics::DiagnosticsStore;
+use crate::transport::{LspTransport, NotificationCallback};
 use anyhow::Result;
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use url::Url;
 
 // ── Public return types ───────────────────────────────────────────────────────
@@ -51,12 +53,18 @@ pub struct LspManager {
     server:       LspServer,
     transport:    Option<LspTransport>,
     initialized:  bool,
+    diagnostics:  DiagnosticsStore,
 }
 
 impl LspManager {
     /// Create a new manager for the given project root.
     /// Auto-detects the appropriate language server.
     pub fn new(project_root: &Path) -> Self {
+        Self::with_diagnostics_store(project_root, DiagnosticsStore::new())
+    }
+
+    /// Create a manager sharing an external diagnostics store (for TUI integration).
+    pub fn with_diagnostics_store(project_root: &Path, diagnostics: DiagnosticsStore) -> Self {
         let server = detect_server(project_root);
         tracing::debug!("LSP server detected: {}", server);
         Self {
@@ -64,7 +72,13 @@ impl LspManager {
             server,
             transport: None,
             initialized: false,
+            diagnostics,
         }
+    }
+
+    /// Access the live diagnostics store (updated by the LSP server in the background).
+    pub fn diagnostics(&self) -> &DiagnosticsStore {
+        &self.diagnostics
     }
 
     /// Return the detected language server type.
@@ -85,37 +99,59 @@ impl LspManager {
         let (cmd, args) = self.server.command_and_args();
         tracing::info!("Starting LSP server: {} {:?}", cmd, args);
 
+        let diag_store = self.diagnostics.clone();
+        let on_notification: NotificationCallback = Arc::new(move |method, params| {
+            if method == "textDocument/publishDiagnostics" {
+                diag_store.handle_publish_diagnostics(&params);
+            }
+        });
+
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let transport = match LspTransport::spawn(&cmd, &arg_refs, &self.project_root).await {
+        let transport = match LspTransport::spawn_with_notifications(
+            &cmd,
+            &arg_refs,
+            &self.project_root,
+            Some(on_notification),
+        )
+        .await
+        {
             Ok(t) => t,
             Err(e) => {
-                tracing::warn!("LSP server '{}' failed to start: {e} — degrading gracefully", cmd);
+                tracing::warn!(
+                    "LSP server '{}' failed to start: {e} — degrading gracefully",
+                    cmd
+                );
                 return Ok(());
             }
         };
 
         let root_uri = path_to_uri(&self.project_root);
-        let init_result = transport.request(
-            "initialize",
-            json!({
-                "processId": std::process::id(),
-                "rootUri": root_uri,
-                "capabilities": {
-                    "textDocument": {
-                        "definition":  { "dynamicRegistration": false },
-                        "references":  { "dynamicRegistration": false },
-                        "hover": {
-                            "dynamicRegistration": false,
-                            "contentFormat": ["plaintext", "markdown"],
+        let init_result = transport
+            .request(
+                "initialize",
+                json!({
+                    "processId": std::process::id(),
+                    "rootUri": root_uri,
+                    "capabilities": {
+                        "textDocument": {
+                            "definition":  { "dynamicRegistration": false },
+                            "references":  { "dynamicRegistration": false },
+                            "hover": {
+                                "dynamicRegistration": false,
+                                "contentFormat": ["plaintext", "markdown"],
+                            },
+                            "publishDiagnostics": {
+                                "relatedInformation": true,
+                            },
+                        },
+                        "workspace": {
+                            "workspaceFolders": true,
                         },
                     },
-                    "workspace": {
-                        "workspaceFolders": true,
-                    },
-                },
-                "workspaceFolders": [{"uri": root_uri, "name": "root"}],
-            }),
-        ).await;
+                    "workspaceFolders": [{"uri": root_uri, "name": "root"}],
+                }),
+            )
+            .await;
 
         match init_result {
             Ok(_) => {
@@ -284,7 +320,7 @@ fn path_to_uri(path: &Path) -> String {
         .unwrap_or_else(|_| format!("file:///{}", canonical.display()))
 }
 
-fn uri_to_path(uri: &str) -> PathBuf {
+pub(crate) fn uri_to_path(uri: &str) -> PathBuf {
     Url::parse(uri)
         .ok()
         .and_then(|u| u.to_file_path().ok())

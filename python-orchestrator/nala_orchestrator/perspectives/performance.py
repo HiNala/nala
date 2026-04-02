@@ -7,6 +7,7 @@ files. Intended as a quick signal, not a profiler replacement.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from pathlib import Path
@@ -39,6 +40,10 @@ class PerformancePerspective(BasePerspective):
         return "Flags basic static performance anti-patterns"
 
     async def analyze(self, project_root: str) -> PerspectiveResult:
+        return await asyncio.to_thread(self._scan, project_root)
+
+    @staticmethod
+    def _scan(project_root: str) -> PerspectiveResult:
         start = time.monotonic()
         root = Path(project_root)
         findings: list[Finding] = []
@@ -71,7 +76,7 @@ class PerformancePerspective(BasePerspective):
                             file_path=rel,
                             start_line=i,
                             severity="medium",
-                            perspective=self.name,
+                            perspective="performance",
                             suggestion=(
                                 "Consider indexing, pre-grouping, or reducing "
                                 "inner-loop work."
@@ -90,14 +95,16 @@ class PerformancePerspective(BasePerspective):
                             file_path=rel,
                             start_line=i,
                             severity="low",
-                            perspective=self.name,
-                            suggestion="Try iterators/lazy pipelines or pre-allocated buffers.",
+                            perspective="performance",
+                            suggestion=(
+                                "Try iterators/lazy pipelines or pre-allocated buffers."
+                            ),
                             code_snippet=stripped[:200],
                         )
                     )
 
         return PerspectiveResult(
-            perspective_name=self.name,
+            perspective_name="performance",
             findings=findings[:100],
             summary=f"Performance scan found {len(findings[:100])} potential hotspot(s).",
             duration_ms=int((time.monotonic() - start) * 1000),

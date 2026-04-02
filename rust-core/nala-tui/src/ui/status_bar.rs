@@ -15,16 +15,22 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Fill(1), Constraint::Min(50)])
         .split(area);
 
-    // Left: mode + stats
     let stats = if app.stats.total_files > 0 {
         let base = format!(
             " {} files · {} symbols",
             app.stats.total_files, app.stats.total_functions
         );
-        if let Some(p) = app.index_progress {
+        let with_progress = if let Some(p) = app.index_progress {
             format!("{} · indexing {:>3}%", base, (p * 100.0).round() as usize)
         } else {
             base
+        };
+        let errors = app.diagnostics_store.error_count();
+        let warnings = app.diagnostics_store.warning_count();
+        if errors > 0 || warnings > 0 {
+            format!("{} · E:{} W:{}", with_progress, errors, warnings)
+        } else {
+            with_progress
         }
     } else {
         app.status_text.clone()

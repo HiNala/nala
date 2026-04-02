@@ -79,6 +79,7 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `/def <file>:<line>:<col>` | Go-to-definition lookup |
 | `/refs <file>:<line>:<col>` | Find references lookup |
 | `/hover <file>:<line>:<col>` | Hover information lookup |
+| `/diag` | Show LSP diagnostics summary (errors/warnings) |
 | `/session` | List past sessions |
 | `/quit` | Exit |
 | *Any other text* | Ask the AI assistant |

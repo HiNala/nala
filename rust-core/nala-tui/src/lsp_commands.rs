@@ -9,11 +9,19 @@ use std::path::PathBuf;
 impl App {
     pub(crate) fn lsp_status(&mut self) {
         let root = self.project_root.clone();
+        let initialized = self.lsp_initialized;
+        let errors = self.diagnostics_store.error_count();
+        let warnings = self.diagnostics_store.warning_count();
+
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
             let manager = nala_lsp::LspManager::new(&root);
             let server = manager.server().to_string();
-            let msg = format!("Detected LSP server: {}", server);
+            let status = if initialized { "running" } else { "not started" };
+            let msg = format!(
+                "LSP: {} ({})\n  Errors: {} | Warnings: {}",
+                server, status, errors, warnings
+            );
             let _ = tx.send(BackgroundEvent::AssistantChunk(msg)).await;
             let _ = tx.send(BackgroundEvent::AssistantDone).await;
         });

@@ -17,6 +17,7 @@ use tokio_stream::StreamExt;
 
 use crate::python_bridge::PythonBridge;
 use crate::ui;
+use nala_lsp::DiagnosticsStore;
 
 // ── App mode ───────────────────────────────────────────────────────────────
 
@@ -119,6 +120,10 @@ pub enum BackgroundEvent {
         message: String,
         output: String,
     },
+    LspStarted {
+        server_name: String,
+    },
+    LspStartFailed(String),
 }
 
 // ── App ────────────────────────────────────────────────────────────────────
@@ -145,6 +150,8 @@ pub struct App {
     pub pending_actions: Vec<PendingAction>,
     pub apply_all: bool,
     pub analysis_scope: Option<String>,
+    pub lsp_initialized: bool,
+    pub diagnostics_store: DiagnosticsStore,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -183,6 +190,8 @@ impl App {
             pending_actions: Vec::new(),
             apply_all: false,
             analysis_scope: None,
+            lsp_initialized: false,
+            diagnostics_store: DiagnosticsStore::new(),
         })
     }
 
@@ -445,6 +454,10 @@ impl App {
                         }
                     });
                 }
+
+                if !self.lsp_initialized {
+                    self.start_lsp_background();
+                }
             }
             BackgroundEvent::IndexError(e) => {
                 self.index_progress = None;
@@ -526,7 +539,53 @@ impl App {
                 }
                 self.show_next_pending_action();
             }
+            BackgroundEvent::LspStarted { server_name } => {
+                self.lsp_initialized = true;
+                self.push_message(Message::system(format!(
+                    "LSP: {} started (diagnostics active)",
+                    server_name
+                )));
+            }
+            BackgroundEvent::LspStartFailed(reason) => {
+                self.push_message(Message::system(format!(
+                    "LSP: not available — {}",
+                    reason
+                )));
+            }
         }
+    }
+
+    pub(crate) fn start_lsp_background(&mut self) {
+        let root = self.project_root.clone();
+        let tx = self.bg_tx.clone();
+        let diag_store = self.diagnostics_store.clone();
+        tokio::spawn(async move {
+            let mut manager =
+                nala_lsp::LspManager::with_diagnostics_store(&root, diag_store);
+            let server_name = manager.server().to_string();
+            if server_name == "None" {
+                let _ = tx
+                    .send(BackgroundEvent::LspStartFailed(
+                        "no supported language server found".into(),
+                    ))
+                    .await;
+                return;
+            }
+            if let Err(e) = manager.initialize().await {
+                let _ = tx
+                    .send(BackgroundEvent::LspStartFailed(e.to_string()))
+                    .await;
+                return;
+            }
+            let _ = tx
+                .send(BackgroundEvent::LspStarted { server_name })
+                .await;
+
+            // Keep the manager alive so the LSP server continues running and
+            // pushing diagnostics. Park until the channel closes (app quits).
+            let _ = tx.closed().await;
+            let _ = manager.shutdown().await;
+        });
     }
 
     // ── Python bridge ──────────────────────────────────────────────────────

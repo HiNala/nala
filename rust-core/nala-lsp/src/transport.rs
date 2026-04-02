@@ -34,6 +34,9 @@ fn next_msg_id() -> i64 {
 
 // ── Transport ─────────────────────────────────────────────────────────────────
 
+/// Callback invoked for server-initiated notifications (no id field).
+pub type NotificationCallback = Arc<dyn Fn(String, Value) + Send + Sync>;
+
 /// Async LSP transport over a child process stdin/stdout.
 pub struct LspTransport {
     stdin:    Arc<Mutex<ChildStdin>>,
@@ -42,8 +45,13 @@ pub struct LspTransport {
 }
 
 impl LspTransport {
-    /// Spawn an LSP server and return a transport handle.
-    pub async fn spawn(server_cmd: &str, server_args: &[&str], project_root: &Path) -> Result<Self> {
+    /// Spawn an LSP server with an optional notification callback.
+    pub async fn spawn_with_notifications(
+        server_cmd: &str,
+        server_args: &[&str],
+        project_root: &Path,
+        on_notification: Option<NotificationCallback>,
+    ) -> Result<Self> {
         let mut cmd = Command::new(server_cmd);
         cmd.args(server_args)
             .current_dir(project_root)
@@ -61,10 +69,9 @@ impl LspTransport {
         let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        // Background task: read responses and dispatch to waiting callers.
         let pending_clone = Arc::clone(&pending);
         tokio::spawn(async move {
-            if let Err(e) = Self::reader_task(stdout, pending_clone).await {
+            if let Err(e) = Self::reader_task(stdout, pending_clone, on_notification).await {
                 tracing::debug!("LSP reader task ended: {e}");
             }
         });
@@ -118,22 +125,22 @@ impl LspTransport {
     async fn reader_task(
         stdout: ChildStdout,
         pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
+        on_notification: Option<NotificationCallback>,
     ) -> Result<()> {
         let mut reader = BufReader::new(stdout);
         let mut header_buf = String::new();
 
         loop {
-            // Read headers until blank line.
             let mut content_length: Option<usize> = None;
             loop {
                 header_buf.clear();
                 let n = reader.read_line(&mut header_buf).await?;
                 if n == 0 {
-                    return Ok(()); // EOF
+                    return Ok(());
                 }
                 let line = header_buf.trim();
                 if line.is_empty() {
-                    break; // End of headers.
+                    break;
                 }
                 if let Some(rest) = line.strip_prefix("Content-Length:") {
                     content_length = rest.trim().parse().ok();
@@ -146,14 +153,17 @@ impl LspTransport {
 
             let msg: Value = serde_json::from_slice(&body)?;
 
-            // Dispatch responses to waiting request callers.
             if let Some(id) = msg.get("id").and_then(|v| v.as_i64()) {
                 let mut p = pending.lock().await;
                 if let Some(tx) = p.remove(&id) {
                     let _ = tx.send(msg);
                 }
+            } else if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
+                if let Some(ref cb) = on_notification {
+                    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+                    cb(method.to_string(), params);
+                }
             }
-            // Notifications (no id) are currently discarded.
         }
     }
 }

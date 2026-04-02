@@ -93,6 +93,9 @@ impl App {
                     _ => self.handoff_show(),
                 }
             }
+            "/diag" | "/diagnostics" => {
+                self.show_diagnostics(parts.get(1).copied().unwrap_or(""));
+            }
             "/clear" => {
                 self.messages.clear();
             }
@@ -137,6 +140,7 @@ impl App {
             "  /context               — show context window usage breakdown\n",
             "  /compact               — compact context window to free tokens\n",
             "  /compact <focus>       — compact while preserving focus topic\n",
+            "  /diag                  — show LSP diagnostics summary (errors/warnings)\n",
             "  /doctor                — environment and readiness diagnostics\n",
             "  /clear                 — clear message log\n",
             "  /help                  — show this help\n",
@@ -448,6 +452,59 @@ impl App {
             self.stats.total_functions
         );
         self.push_message(Message::assistant(text));
+    }
+
+    fn show_diagnostics(&mut self, _filter: &str) {
+        let errors = self.diagnostics_store.error_count();
+        let warnings = self.diagnostics_store.warning_count();
+
+        if errors == 0 && warnings == 0 {
+            if self.lsp_initialized {
+                self.push_message(Message::system("No diagnostics — all clear."));
+            } else {
+                self.push_message(Message::system(
+                    "LSP not started yet. Run /index first to auto-start the language server.",
+                ));
+            }
+            return;
+        }
+
+        let mut lines = vec![format!("LSP Diagnostics: {} errors, {} warnings", errors, warnings)];
+        lines.push(String::new());
+
+        let store = &self.diagnostics_store;
+        if let Ok(map) = store.inner_snapshot() {
+            let mut files: Vec<_> = map.keys().collect();
+            files.sort();
+            for file in files.into_iter().take(20) {
+                let diags = &map[file];
+                let rel = file
+                    .strip_prefix(&self.project_root)
+                    .unwrap_or(file)
+                    .display();
+                for d in diags.iter().take(5) {
+                    let sev = match d.severity {
+                        nala_lsp::DiagSeverity::Error => "E",
+                        nala_lsp::DiagSeverity::Warning => "W",
+                        nala_lsp::DiagSeverity::Info => "I",
+                        nala_lsp::DiagSeverity::Hint => "H",
+                    };
+                    lines.push(format!(
+                        "  [{}] {}:{}:{} — {}",
+                        sev,
+                        rel,
+                        d.line + 1,
+                        d.col + 1,
+                        d.message,
+                    ));
+                }
+                if diags.len() > 5 {
+                    lines.push(format!("  ... and {} more in {}", diags.len() - 5, rel));
+                }
+            }
+        }
+
+        self.push_message(Message::assistant(lines.join("\n")));
     }
 
     fn team_start(&mut self, objective: String) {
