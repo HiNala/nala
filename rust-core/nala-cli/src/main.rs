@@ -58,9 +58,11 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    init_logging(cli.verbose);
-
-    info!("{} v{} starting", APP_NAME, APP_VERSION);
+    let running_tui = matches!(cli.command, Some(Commands::Tui) | None);
+    if !running_tui {
+        init_logging(cli.verbose);
+        info!("{} v{} starting", APP_NAME, APP_VERSION);
+    }
 
     match cli.command {
         Some(Commands::Scan) => run_scan(&cli.path).await,

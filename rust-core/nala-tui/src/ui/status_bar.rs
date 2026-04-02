@@ -14,16 +14,54 @@ use ratatui::{
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Fill(1), Constraint::Min(40)])
-        .split(area);
-
     let mode_color = match app.mode {
         AppMode::Ready => theme::GREEN,
         AppMode::Analyzing => theme::YELLOW,
         AppMode::Confirming => theme::YELLOW,
         _ => theme::CYAN,
+    };
+
+    let mut detail = if app.stats.total_files > 0 {
+        format!(" {} files  {} symbols", app.stats.total_files, app.stats.total_functions)
+    } else {
+        format!(" {}", app.status_text)
+    };
+
+    if app.context_effective_limit > 0 && area.width >= 90 {
+        let bar = context_bar(app.context_utilization_pct);
+        detail.push_str(&format!(
+            "  ctx {:.0}% {} {}/{}",
+            app.context_utilization_pct,
+            bar,
+            short_tokens(app.context_total_tokens),
+            short_tokens(app.context_effective_limit)
+        ));
+    }
+
+    let right_text = if area.width >= 110 && !app.llm_model.is_empty() {
+        format!("{}  /help", app.llm_model)
+    } else if area.width >= 72 {
+        "/help".to_string()
+    } else {
+        String::new()
+    };
+
+    let right_width = right_text.chars().count() as u16;
+    let left_detail_limit = area
+        .width
+        .saturating_sub(right_width.saturating_add(10)) as usize;
+    let detail = truncate_text(&detail, left_detail_limit);
+
+    let cols = if right_text.is_empty() {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Fill(1)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Fill(1), Constraint::Length(right_width)])
+            .split(area)
     };
 
     let mut left_spans: Vec<Span> = vec![Span::styled(
@@ -40,73 +78,28 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme::YELLOW),
         ));
     }
-
-    if app.stats.total_files > 0 {
-        left_spans.push(Span::styled(
-            format!(
-                " {} files  {} symbols",
-                app.stats.total_files, app.stats.total_functions
-            ),
-            Style::default().fg(theme::GRAY),
-        ));
-    } else {
-        left_spans.push(Span::styled(
-            format!(" {}", app.status_text),
-            Style::default().fg(theme::GRAY),
-        ));
-    }
-
-    if app.context_effective_limit > 0 {
-        let ctx_color = if app.context_utilization_pct < 60.0 {
-            theme::GREEN
-        } else if app.context_utilization_pct < 80.0 {
-            theme::YELLOW
-        } else {
-            theme::RED
-        };
-        let bar = context_bar(app.context_utilization_pct);
-        left_spans.push(Span::styled("  ctx ", Style::default().fg(theme::GRAY)));
-        left_spans.push(Span::styled(
-            format!("{:.0}% ", app.context_utilization_pct),
-            Style::default().fg(ctx_color).add_modifier(Modifier::BOLD),
-        ));
-        left_spans.push(Span::styled(
-            format!("{} ", bar),
-            Style::default().fg(ctx_color),
-        ));
-        left_spans.push(Span::styled(
-            format!(
-                "{}/{}",
-                short_tokens(app.context_total_tokens),
-                short_tokens(app.context_effective_limit)
-            ),
-            Style::default().fg(theme::GRAY),
-        ));
-    }
+    left_spans.push(Span::styled(detail, Style::default().fg(theme::GRAY)));
 
     frame.render_widget(Paragraph::new(Line::from(left_spans)), cols[0]);
 
-    let mut right_spans: Vec<Span> = Vec::new();
-
-    if !app.llm_model.is_empty() {
-        right_spans.push(Span::styled(
-            app.llm_model.clone(),
-            Style::default().fg(theme::GRAY),
-        ));
-        right_spans.push(Span::styled("  ", Style::default()));
+    if !right_text.is_empty() {
+        let right_spans = if right_text == "/help" {
+            vec![Span::styled("/help", Style::default().fg(theme::CYAN))]
+        } else {
+            vec![
+                Span::styled(
+                    app.llm_model.clone(),
+                    Style::default().fg(theme::GRAY),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled("/help", Style::default().fg(theme::CYAN)),
+            ]
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(right_spans)).alignment(ratatui::layout::Alignment::Right),
+            cols[1],
+        );
     }
-
-    right_spans.push(Span::styled(
-        "/help",
-        Style::default().fg(theme::CYAN),
-    ));
-    right_spans.push(Span::styled(" ", Style::default()));
-
-    let hints = Line::from(right_spans);
-    frame.render_widget(
-        Paragraph::new(hints).alignment(ratatui::layout::Alignment::Right),
-        cols[1],
-    );
 }
 
 fn context_bar(utilization_pct: f64) -> String {
@@ -123,4 +116,23 @@ fn short_tokens(tokens: usize) -> String {
     } else {
         tokens.to_string()
     }
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
+        return text.to_string();
+    }
+
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+
+    let keep = max_chars - 3;
+    let truncated: String = text.chars().take(keep).collect();
+    format!("{}...", truncated)
 }

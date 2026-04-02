@@ -45,17 +45,28 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_body(frame: &mut Frame, app: &App, area: Rect) {
-    let left_open = app.panels.file_panel_open;
-    let right_open = app.panels.session_panel_open;
+    let requested_left = app.panels.file_panel_open;
+    let requested_right = app.panels.session_panel_open;
+    let side_width = if area.width >= 140 { 28 } else { 22 };
+    let min_main_width = 60;
+    let both_fit = area.width >= min_main_width + (side_width * 2);
+    let one_fit = area.width >= min_main_width + side_width;
+
+    let (left_open, right_open) = match (requested_left, requested_right) {
+        (true, true) if both_fit => (true, true),
+        (true, false) if one_fit => (true, false),
+        (false, true) if one_fit => (false, true),
+        _ => (false, false),
+    };
 
     let constraints = match (left_open, right_open) {
         (true, true) => vec![
-            Constraint::Length(28),
+            Constraint::Length(side_width),
             Constraint::Fill(1),
-            Constraint::Length(26),
+            Constraint::Length(side_width),
         ],
-        (true, false) => vec![Constraint::Length(28), Constraint::Fill(1)],
-        (false, true) => vec![Constraint::Fill(1), Constraint::Length(26)],
+        (true, false) => vec![Constraint::Length(side_width), Constraint::Fill(1)],
+        (false, true) => vec![Constraint::Fill(1), Constraint::Length(side_width)],
         (false, false) => vec![Constraint::Fill(1)],
     };
 

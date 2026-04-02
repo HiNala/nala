@@ -60,19 +60,16 @@ class OpenAIProvider(BaseLLMProvider):
         system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
-        all_messages = []
-        if system_prompt:
-            all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend({"role": m.role, "content": m.content} for m in messages)
-
-        stream = await self._client.chat.completions.create(
-            model=self.model,
-            messages=all_messages,
+        # The direct OpenAI streaming path can hang intermittently on Windows
+        # when used behind the JSON-lines subprocess bridge. Reuse the stable
+        # non-streaming call and yield the response in small chunks so the TUI
+        # still renders progressively.
+        response = await self.chat(
+            messages=messages,
+            system_prompt=system_prompt,
             max_tokens=max_tokens,
-            stream=True,
         )
-
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+        content = response.content or ""
+        chunk_size = 160
+        for start in range(0, len(content), chunk_size):
+            yield content[start : start + chunk_size]

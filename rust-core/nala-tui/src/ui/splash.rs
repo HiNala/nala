@@ -8,7 +8,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
@@ -28,6 +28,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or("project");
     let branch = detect_git_branch(&app.project_root);
     let path_display = abbreviate_path(&app.project_root);
+
+    if area.width < 72 || area.height < 16 {
+        render_compact(frame, app, area, project_name, branch.as_deref(), &path_display);
+        return;
+    }
 
     let logo_colors = [
         theme::CYAN,
@@ -113,7 +118,78 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(shortcut_line("  Tab     ", "autocomplete commands"));
     lines.push(shortcut_line("  Ctrl+C  ", "quit"));
 
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
+fn render_compact(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    project_name: &str,
+    branch: Option<&str>,
+    path_display: &str,
+) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  HiNala",
+            Style::default()
+                .fg(theme::CYAN)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    let mut project_spans = vec![Span::styled(
+        format!("  {}", project_name),
+        Style::default()
+            .fg(theme::WHITE)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if let Some(branch) = branch {
+        project_spans.push(Span::styled(
+            format!(" on {}", branch),
+            Style::default().fg(theme::GREEN),
+        ));
+    }
+    lines.push(Line::from(project_spans));
+
+    if !app.llm_provider.is_empty() {
+        let provider = format_provider(&app.llm_provider);
+        let model = if app.llm_model.is_empty() {
+            String::new()
+        } else {
+            format!(" / {}", app.llm_model)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {}{}", provider, model),
+            Style::default().fg(theme::YELLOW),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Connecting...",
+            Style::default().fg(theme::GRAY),
+        )));
+    }
+
+    lines.push(Line::from(Span::styled(
+        format!("  {}", path_display),
+        Style::default().fg(theme::GRAY),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  /help for commands",
+        Style::default().fg(theme::WHITE),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  /analyze for code analysis",
+        Style::default().fg(theme::WHITE),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Ctrl+B files  Ctrl+E sessions",
+        Style::default().fg(theme::GRAY),
+    )));
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn tip_line(prefix: &str, text: &str) -> Line<'static> {

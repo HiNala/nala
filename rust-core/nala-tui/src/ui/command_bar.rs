@@ -34,6 +34,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(theme::WHITE)
     };
 
+    let prompt_width = 3usize;
+    let available_text = area.width.saturating_sub(prompt_width as u16) as usize;
+
     let content = if app.input.is_empty() {
         Line::from(vec![
             Span::styled(
@@ -43,11 +46,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "Type a question or /help for commands",
+                truncate_text("Type a question or /help for commands", available_text),
                 Style::default().fg(theme::GRAY),
             ),
         ])
     } else {
+        let visible_input = tail_fit(&app.input, available_text);
         let mut spans = vec![
             Span::styled(
                 " > ",
@@ -55,16 +59,52 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     .fg(theme::GREEN)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(&app.input[..], input_style),
+            Span::styled(visible_input, input_style),
         ];
 
         if let Some(hint) = app::tab_hint(&app.input) {
-            let ghost = &hint[app.input.len()..];
-            spans.push(Span::styled(ghost, Style::default().fg(theme::GRAY)));
+            if let Some(ghost) = hint.get(app.input.len()..) {
+                let remaining = available_text.saturating_sub(app.input.chars().count());
+                if remaining > 0 {
+                    spans.push(Span::styled(
+                        truncate_text(ghost, remaining),
+                        Style::default().fg(theme::GRAY),
+                    ));
+                }
+            }
         }
 
         Line::from(spans)
     };
 
     frame.render_widget(Paragraph::new(content), rows[1]);
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let kept: String = text.chars().take(max_chars - 3).collect();
+    format!("{kept}...")
+}
+
+fn tail_fit(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let kept: String = chars[chars.len() - (max_chars - 3)..].iter().collect();
+    format!("...{kept}")
 }

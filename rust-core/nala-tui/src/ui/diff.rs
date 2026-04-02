@@ -90,7 +90,7 @@ fn colorize_diff_line(line: &str) -> Line<'static> {
     } else if line.starts_with("@@") || line.starts_with("---") || line.starts_with("+++") {
         Line::from(Span::styled(
             format!("  {}", line),
-            Style::default().fg(theme::DARK_GRAY).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme::GRAY).add_modifier(Modifier::BOLD),
         ))
     } else {
         Line::from(Span::styled(format!("  {}", line), Style::default().fg(theme::GRAY)))

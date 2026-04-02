@@ -894,14 +894,9 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
         "version": VERSION,
     })
 
-    loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-
     while True:
         try:
-            line = await reader.readline()
+            line = await asyncio.to_thread(sys.stdin.buffer.readline)
             if not line:
                 break  # EOF — Rust side closed stdin
             line = line.decode("utf-8", errors="replace").strip()
