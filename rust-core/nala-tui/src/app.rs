@@ -177,6 +177,9 @@ pub enum BackgroundEvent {
         plan_steps: Vec<String>,
         verification_summary: String,
         workers: Vec<String>,
+        choices: Vec<String>,
+        checkpoint_count: usize,
+        notification_priority: String,
     },
 }
 
@@ -235,6 +238,9 @@ pub struct App {
     pub agent_task_id: String,
     pub agent_verification_summary: String,
     pub agent_workers: Vec<String>,
+    pub agent_choices: Vec<String>,
+    pub agent_checkpoint_count: usize,
+    pub agent_notification_priority: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -379,6 +385,9 @@ impl App {
             agent_task_id: String::new(),
             agent_verification_summary: String::new(),
             agent_workers: Vec::new(),
+            agent_choices: Vec::new(),
+            agent_checkpoint_count: 0,
+            agent_notification_priority: "quiet".to_string(),
         })
     }
 
@@ -1005,6 +1014,9 @@ impl App {
                 plan_steps,
                 verification_summary,
                 workers,
+                choices,
+                checkpoint_count,
+                notification_priority,
             } => {
                 self.agent_run_id = run_id;
                 self.agent_phase = phase.clone();
@@ -1015,6 +1027,9 @@ impl App {
                 self.agent_plan_steps = plan_steps;
                 self.agent_verification_summary = verification_summary;
                 self.agent_workers = workers;
+                self.agent_choices = choices;
+                self.agent_checkpoint_count = checkpoint_count;
+                self.agent_notification_priority = notification_priority;
                 if phase == "idle" || phase == "done" || phase == "cancelled" {
                     if self.agent_panel_open && phase != "idle" {
                         // keep panel open so user sees final state
@@ -1127,6 +1142,14 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/agent worktree list",
     "/agent worktree create",
     "/agent worktree cleanup",
+    // ── Research ──
+    "/agent research",
+    // ── Control ──
+    "/agent pause",
+    "/agent checkpoint",
+    "/agent checkpoints",
+    "/agent restore",
+    "/agent next",
     // ── Stable commands ──
     "/help",
     "/scan",

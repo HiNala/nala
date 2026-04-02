@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..research.service import ResearchService
 from ..skills.registry import SkillRegistry
 from .state import AgentPhase, AgentPlan, AgentRun, AutonomyLevel, load_run, save_run
 from .toolbox import Toolbox
@@ -48,6 +49,9 @@ class AgentManager:
             self._run = None
         self._mode: str = "plan"
         self.skills = SkillRegistry(project_root)
+        self.research = ResearchService(config, project_root, orchestrator)
+        self._checkpoints: list[dict] = []
+        self._pending_choices: list[str] = []
         run_id = self._run.run_id if self._run else ""
         self._workers = WorkerRegistry(run_id)
         if self._run and self._run.workers:
@@ -69,6 +73,7 @@ class AgentManager:
 
     def set_orchestrator(self, orch: AgentOrchestrator) -> None:
         self.toolbox.set_orchestrator(orch)
+        self.research.set_orchestrator(orch)
 
     def set_task_ledger(self, ledger: TaskLedger) -> None:
         self.toolbox.set_task_ledger(ledger)
@@ -186,6 +191,9 @@ class AgentManager:
             context_parts.append(
                 f"\nAvailable verification: {', '.join(verification_cmds)}"
             )
+        research_ctx = self.research_context()
+        if research_ctx:
+            context_parts.append(f"\n{research_ctx}")
         context_parts.append(
             "Format each step as a numbered list. Include risk assessment "
             "and verification commands at the end."
@@ -339,6 +347,16 @@ class AgentManager:
         team_text = self.toolbox.team_status()
         if team_text and "No team run active" not in team_text:
             parts.append(f"\n## Team\n{team_text}")
+
+        worker_text = self._workers.format_summary()
+        if "No workers" not in worker_text:
+            parts.append(f"\n## Workers\n{worker_text}")
+
+        choices = self.suggest_next_steps()
+        if choices:
+            parts.append("\n## Next Steps")
+            for c in choices:
+                parts.append(f"  - {c}")
 
         return "\n\n".join(parts)
 
@@ -499,3 +517,157 @@ class AgentManager:
         if git_ops.cleanup_worktree(self.project_root, label):
             return f"Removed worktree `{label}`."
         return f"Failed to remove worktree `{label}`."
+
+    # ── Research (M35) ────────────────────────────────────────────────
+
+    async def do_research(self, question: str) -> AsyncIterator[str]:
+        """Run explicit web research. Yields streaming output."""
+        if self._run:
+            self._transition(AgentPhase.RESEARCHING)
+        async for chunk in self.research.research(question):
+            yield chunk
+        if self._run and self._run.phase == AgentPhase.RESEARCHING:
+            self._transition(AgentPhase.REVIEWING)
+
+    def research_context(self) -> str:
+        """Inject recent research into LLM context."""
+        return self.research.format_research_context()
+
+    # ── Pause / checkpoint (M36) ──────────────────────────────────────
+
+    def pause(self) -> str:
+        """Pause the active run."""
+        if self._run is None:
+            return "No active agent run to pause."
+        if self._run.phase in (
+            AgentPhase.DONE, AgentPhase.CANCELLED, AgentPhase.PAUSED,
+        ):
+            return f"Agent run is already {self._run.phase.value}."
+        prev = self._run.phase.value
+        self._transition(AgentPhase.PAUSED)
+        return f"Agent run paused (was {prev}). Use `/agent resume` to continue."
+
+    def checkpoint(self, label: str = "") -> str:
+        """Save a checkpoint of the current run state."""
+        if self._run is None:
+            return "No active agent run."
+        from datetime import UTC, datetime
+        cp = {
+            "label": label or f"cp-{len(self._checkpoints) + 1}",
+            "phase": self._run.phase.value,
+            "objective": self._run.objective,
+            "plan_steps": self._run.plan.steps if self._run.plan else [],
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        self._checkpoints.append(cp)
+        self._run.checkpoints = self._checkpoints
+        save_run(self.project_root, self._run)
+        return f"Checkpoint **{cp['label']}** saved (phase: {cp['phase']})."
+
+    def list_checkpoints(self) -> str:
+        if not self._checkpoints:
+            return "No checkpoints saved."
+        lines = ["**Checkpoints:**"]
+        for i, cp in enumerate(self._checkpoints):
+            lines.append(
+                f"  {i + 1}. `{cp['label']}` — {cp['phase']} ({cp['created_at'][:19]})"
+            )
+        return "\n".join(lines)
+
+    def restore_checkpoint(self, index: int) -> str:
+        """Restore run state to a checkpoint."""
+        if not self._checkpoints:
+            return "No checkpoints to restore."
+        if index < 0 or index >= len(self._checkpoints):
+            return f"Invalid checkpoint index. Valid: 0 to {len(self._checkpoints) - 1}."
+        cp = self._checkpoints[index]
+        if self._run is None:
+            return "No active agent run."
+        try:
+            self._run.phase = AgentPhase(cp["phase"])
+        except ValueError:
+            self._run.phase = AgentPhase.IDLE
+        save_run(self.project_root, self._run)
+        return f"Restored to checkpoint **{cp['label']}** (phase: {cp['phase']})."
+
+    # ── Human-in-the-loop choices (M36) ───────────────────────────────
+
+    def suggest_next_steps(self) -> list[str]:
+        """Return context-appropriate next-step suggestions."""
+        if self._run is None:
+            return ["Type `/agent <objective>` to start a new run."]
+
+        phase = self._run.phase
+        choices: list[str] = []
+        if phase == AgentPhase.PLANNING:
+            choices = [
+                "`/agent approve` — approve plan and begin execution",
+                "`/agent reject` — revise the plan",
+                "`/agent mode <level>` — change autonomy level",
+                "`/agent pause` — save progress and pause",
+            ]
+        elif phase == AgentPhase.AWAITING_APPROVAL:
+            choices = [
+                "`/agent approve` — approve and proceed",
+                "`/agent reject` — reject and re-plan",
+                "`/agent review` — review the diff first",
+            ]
+        elif phase == AgentPhase.EXECUTING:
+            choices = [
+                "`/agent status` — check progress",
+                "`/agent workers` — inspect workers",
+                "`/agent pause` — pause execution",
+                "`/agent stop` — cancel the run",
+            ]
+        elif phase == AgentPhase.VERIFYING:
+            choices = [
+                "`/agent status` — check verification progress",
+                "`/agent review` — review changes",
+            ]
+        elif phase == AgentPhase.REVIEWING:
+            choices = [
+                "`/agent verify` — run verification",
+                "`/agent checkpoint` — save a checkpoint",
+                "`/agent stop` — mark as done",
+                "`/agent research <q>` — look up something",
+            ]
+        elif phase == AgentPhase.PAUSED:
+            choices = [
+                "`/agent resume` — continue where you left off",
+                "`/agent status` — check current state",
+                "`/agent stop` — cancel the run",
+            ]
+        elif phase == AgentPhase.BLOCKED:
+            choices = [
+                "`/agent resume` — retry after fixing the issue",
+                "`/agent workers` — check worker status",
+                "`/agent stop` — cancel the run",
+            ]
+        elif phase == AgentPhase.DONE:
+            choices = [
+                "`/agent review` — final review",
+                "`/agent scm` — check git state",
+                "Start a new `/agent <objective>`",
+            ]
+        else:
+            choices = ["`/agent status` — check current state"]
+        return choices
+
+    @property
+    def pending_choices(self) -> list[str]:
+        return self.suggest_next_steps()
+
+    def notification_priority(self) -> str:
+        """Determine whether to interrupt or quietly update.
+
+        Returns 'interrupt' for decisions requiring user input,
+        'quiet' for progress milestones.
+        """
+        if self._run is None:
+            return "quiet"
+        phase = self._run.phase
+        if phase in (AgentPhase.AWAITING_APPROVAL, AgentPhase.BLOCKED):
+            return "interrupt"
+        if phase in (AgentPhase.EXECUTING, AgentPhase.VERIFYING, AgentPhase.RESEARCHING):
+            return "quiet"
+        return "quiet"

@@ -29,6 +29,9 @@ HiNala combines the speed of NeoVim, the intelligence of Cursor, the code-review
 - **Worker management** — `/agent workers`, `/agent attach`, `/agent message`, `/agent cancel-worker` for full worker control
 - **Git integration** — `/agent scm`, `/agent compare`, `/agent blame`, branch comparison, worktree support
 - **Worktree isolation** — spawn workers in isolated git worktrees for safe parallel edits
+- **Web research** — `/agent research <question>` with citation tracking, caching, and budget limits
+- **Pause/checkpoint** — `/agent pause`, `/agent checkpoint`, `/agent restore` for durable run control
+- **Human-in-the-loop** — context-appropriate next-step suggestions, notification priority (interrupt vs quiet), checkpoint indicators
 - **Action mode** — `/agent <instruction>` to propose file edits with diff preview + y/n confirmation
 - **Context window management** — `/context` usage, `/compact` compaction with handoff docs
 - **Clipboard paste** — bracketed paste support for pasting text from clipboard into input
@@ -145,6 +148,22 @@ The dashboard should open on `http://127.0.0.1:3000` and use the current directo
 | `/agent worktree list` | List active worktrees |
 | `/agent worktree create <label>` | Create an isolated worktree for a worker |
 | `/agent worktree cleanup <label>` | Remove a worktree and its branch |
+
+**Research:**
+
+| Command | Description |
+|---------|-------------|
+| `/agent research <question>` | Bounded web research with cited outputs |
+
+**Control (Human-in-the-Loop):**
+
+| Command | Description |
+|---------|-------------|
+| `/agent pause` | Pause the current agent run |
+| `/agent checkpoint [label]` | Save a checkpoint of current state |
+| `/agent checkpoints` | List saved checkpoints |
+| `/agent restore <index>` | Restore to a saved checkpoint |
+| `/agent next` | Show context-appropriate next-step suggestions |
 
 **Code Intelligence:**
 
@@ -283,6 +302,7 @@ nala/
 │       ├── agents/         LLM query orchestration, action extraction/execution
 │       ├── agent_runtime/  Central control plane: manager, state, toolbox, workers
 │       ├── skills/         Reusable agent workflow recipes (built-in + user)
+│       ├── research/       Web research service (query, cache, citations)
 │       ├── git_ops.py      Git operations (status, diff, blame, worktrees)
 │       └── git_review.py   Review flows (branch review, SCM overview)
 ├── dashboard/              Optional FastAPI + D3.js web dashboard
@@ -321,6 +341,7 @@ The build is structured through Mission 26 (and growing). Each mission is in `do
 | Objective Agent | 25-28 | Objective-driven workflows, command surface, control plane |
 | Agent UX | 29-31 | Agent workbench TUI, autonomous loop, skills & memory |
 | Multi-Agent & Git | 32-34 | Worker architecture, attach flow, git integration & worktrees |
+| Research & HITL | 35-36 | Web research grounding, human-in-the-loop orchestration UX |
 
 ---
 

@@ -25,7 +25,9 @@ class AgentPhase(str, Enum):
     EXECUTING = "executing"
     VERIFYING = "verifying"
     REVIEWING = "reviewing"
+    RESEARCHING = "researching"
     DONE = "done"
+    PAUSED = "paused"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
 
@@ -82,6 +84,7 @@ class AgentRun:
     current_task_id: str = ""
     team_run_active: bool = False
     workers: list[dict] = field(default_factory=list)
+    checkpoints: list[dict] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
     created_at: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat(),

@@ -138,12 +138,12 @@ Examples:
 
 ## Acceptance Criteria
 
-- [ ] The interpreter terminal remains readable and useful while the orchestrator and workers operate
-- [ ] The user always knows the current objective, phase, and autonomy level
-- [ ] Important decisions are presented as explicit choices
-- [ ] Attach/takeover and return flows are coherent
-- [ ] Pause, resume, and checkpoint behavior are defined and implemented
-- [ ] The experience feels like one system, not several disconnected features
+- [x] The interpreter terminal remains readable and useful while the orchestrator and workers operate
+- [x] The user always knows the current objective, phase, and autonomy level
+- [x] Important decisions are presented as explicit choices
+- [x] Attach/takeover and return flows are coherent
+- [x] Pause, resume, and checkpoint behavior are defined and implemented
+- [x] The experience feels like one system, not several disconnected features
 
 ## Estimated Complexity
 

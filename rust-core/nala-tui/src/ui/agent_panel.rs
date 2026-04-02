@@ -193,6 +193,33 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(theme::GRAY),
                 ))));
             }
+            items.push(ListItem::new(Line::from("")));
+        }
+
+        if app.agent_checkpoint_count > 0 {
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("Checkpoints: {}", app.agent_checkpoint_count),
+                Style::default().fg(theme::GRAY),
+            ))));
+        }
+
+        if !app.agent_choices.is_empty() && items.len() < max_lines.saturating_sub(4) {
+            items.push(ListItem::new(Line::from("")));
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Next:",
+                Style::default()
+                    .fg(theme::YELLOW)
+                    .add_modifier(Modifier::BOLD),
+            ))));
+            for choice in app.agent_choices.iter().take(4) {
+                if items.len() >= max_lines.saturating_sub(1) {
+                    break;
+                }
+                items.push(ListItem::new(Line::from(Span::styled(
+                    truncate(choice, max_w),
+                    Style::default().fg(theme::YELLOW),
+                ))));
+            }
         }
     }
 

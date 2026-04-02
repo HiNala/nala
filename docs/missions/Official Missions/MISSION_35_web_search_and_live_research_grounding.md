@@ -109,12 +109,12 @@ Store research notes under `.nala/agent/research/` so later runs can reuse relev
 
 ## Acceptance Criteria
 
-- [ ] `/agent` can run explicit web research with cited outputs
-- [ ] The orchestrator can invoke live research during planning when needed
-- [ ] The main terminal shows concise summaries of what was researched and why
-- [ ] Research artifacts are persisted with links and extracted facts
-- [ ] The user can distinguish repo-local facts from web-derived facts
-- [ ] Research is budgeted and bounded
+- [x] `/agent` can run explicit web research with cited outputs
+- [x] The orchestrator can invoke live research during planning when needed
+- [x] The main terminal shows concise summaries of what was researched and why
+- [x] Research artifacts are persisted with links and extracted facts
+- [x] The user can distinguish repo-local facts from web-derived facts
+- [x] Research is budgeted and bounded
 
 ## Estimated Complexity
 

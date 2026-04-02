@@ -1244,6 +1244,14 @@ impl App {
                      - `/agent worktree list`            — list worktrees\n\
                      - `/agent worktree create <label>`  — create an isolated worktree\n\
                      - `/agent worktree cleanup <label>` — remove a worktree\n\n\
+                     **Research:**\n\
+                     - `/agent research <question>`      — web research with cited outputs\n\n\
+                     **Control:**\n\
+                     - `/agent pause`                    — pause the current run\n\
+                     - `/agent checkpoint [label]`       — save a checkpoint\n\
+                     - `/agent checkpoints`              — list saved checkpoints\n\
+                     - `/agent restore <index>`          — restore to a checkpoint\n\
+                     - `/agent next`                     — show next-step suggestions\n\n\
                      **Workflow:** plan → approve → run → review → verify → done.\n\
                      **Keybindings:** `Ctrl+G` toggles the agent workbench panel.",
                 ));
@@ -1465,6 +1473,46 @@ impl App {
                         ));
                     }
                 }
+            }
+            // ── Research (M35) ──────────────────────────────────────
+            "research" => {
+                if rest.is_empty() {
+                    self.push_message(Message::error("Usage: /agent research <question>"));
+                    return;
+                }
+                let question = rest.to_string();
+                self.push_message(Message::system(format!("Researching: {}", rest)));
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_research(question).await.map_err(|e| e.to_string())
+                });
+            }
+            // ── Pause / checkpoint (M36) ────────────────────────────
+            "pause" => {
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_pause().await.map_err(|e| e.to_string())
+                });
+            }
+            "checkpoint" => {
+                let label = rest.to_string();
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_checkpoint(label).await.map_err(|e| e.to_string())
+                });
+            }
+            "checkpoints" => {
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_checkpoints().await.map_err(|e| e.to_string())
+                });
+            }
+            "restore" => {
+                let idx: u32 = rest.parse().unwrap_or(0);
+                self.agent_dispatch(move |b, _tx| async move {
+                    b.agent_restore(idx).await.map_err(|e| e.to_string())
+                });
+            }
+            "next" => {
+                self.agent_dispatch(|b, _tx| async move {
+                    b.agent_next_steps().await.map_err(|e| e.to_string())
+                });
             }
             _ => {
                 let objective = args.trim().to_string();

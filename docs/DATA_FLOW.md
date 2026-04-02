@@ -265,3 +265,73 @@ Handoff document  >  Session memory  >  Knowledge base  >  empty
 ```
 Only the highest-priority available source is injected (handoff takes precedence
 over session memory to avoid duplication).
+
+---
+
+## Flow 7: Agent Orchestration (Missions 32-36)
+
+The `/agent` command activates a three-layer orchestration model:
+
+```
+Interpreter (TUI)         Orchestrator (Python)        Workers (Python)
+─────────────────         ───────────────────          ─────────────────
+User types /agent ──────► AgentManager.start()
+                          │
+                          ├─ load project brief
+                          ├─ load scoped guidance
+                          ├─ detect verification cmds
+                          │
+                          ├─ plan() ────────────────► LLM generates plan
+                          │  └── research (if needed)  └── ResearchService
+                          │
+                          ├─ AWAITING_APPROVAL ─────► user sees choices
+User approves ──────────► approve()
+                          │
+                          ├─ run_execution() ────────► LeadAgent.run()
+                          │  ├─ spawn_worker()          ├── WorkerAgent 1
+                          │  ├─ spawn_worker()          ├── WorkerAgent 2
+                          │  └─ spawn_worker()          └── WorkerAgent 3
+                          │                                  (max 3, no recursion)
+                          │
+Summary to TUI ◄──────── status broadcast (IPC)
+                          │
+                          ├─ verify() ───────────────► auto-detect + run checks
+                          │
+                          ├─ review() ───────────────► git diff + blame
+                          │
+                          └─ DONE / checkpoint / pause
+```
+
+### Human-in-the-Loop Controls
+
+At every phase transition, the orchestrator suggests appropriate next steps:
+- `PLANNING` → approve, reject, change mode, pause
+- `AWAITING_APPROVAL` → approve, reject, review first
+- `EXECUTING` → check status, inspect workers, pause, stop
+- `REVIEWING` → verify, checkpoint, research, stop
+- `PAUSED` → resume, status, stop
+- `BLOCKED` → resume (after fix), check workers, stop
+
+### Notification Priority
+
+The system uses two notification levels:
+- **interrupt**: approval needed, safety issues, blocked workers
+- **quiet**: progress milestones, phase transitions, worker completion
+
+### Research Flow
+
+```
+/agent research <question>
+  │
+  ▼
+ResearchService.research()
+  ├─ check cache (disk: .nala/agent/research/*.json)
+  ├─ if cached → return immediately
+  ├─ else → LLM-powered research prompt
+  ├─ parse structured response (summary, facts, citations, uncertainties)
+  ├─ persist to cache
+  └─ return attributed result to interpreter
+```
+
+Research is bounded: max 10 queries per run, max 5 sources per query.
+Recent research is automatically injected into planning context.

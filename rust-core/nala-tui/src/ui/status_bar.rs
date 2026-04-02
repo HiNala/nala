@@ -35,6 +35,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         if !app.agent_mode.is_empty() {
             detail.push_str(&format!("[{}]", app.agent_mode.to_uppercase()));
         }
+        if app.agent_checkpoint_count > 0 {
+            detail.push_str(&format!(" cp:{}", app.agent_checkpoint_count));
+        }
+        if !app.agent_choices.is_empty() {
+            detail.push_str(&format!(" ⚡{}", app.agent_choices.len()));
+        }
     }
 
     if app.context_effective_limit > 0 && area.width >= 90 {

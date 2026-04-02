@@ -140,6 +140,14 @@ pub enum BridgeRequest {
     AgentWorktreeList,
     AgentWorktreeCreate { label: String },
     AgentWorktreeCleanup { label: String },
+    // ── Research (M35) ─────────────────────────────────────────────
+    AgentResearch { question: String },
+    // ── Pause / checkpoint (M36) ───────────────────────────────────
+    AgentPause,
+    AgentCheckpoint { label: String },
+    AgentCheckpoints,
+    AgentRestore { index: u32 },
+    AgentNextSteps,
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -511,6 +519,36 @@ impl PythonBridge {
 
     pub async fn agent_worktree_cleanup(&self, label: String) -> Result<()> {
         self.request_tx.send(BridgeRequest::AgentWorktreeCleanup { label }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_research(&self, question: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentResearch { question }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_pause(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentPause).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_checkpoint(&self, label: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentCheckpoint { label }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_checkpoints(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentCheckpoints).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_restore(&self, index: u32) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentRestore { index }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn agent_next_steps(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::AgentNextSteps).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -909,6 +947,33 @@ async fn bridge_task(
                                 "type": "agent_worktree_cleanup",
                                 "label": label,
                             }),
+                            BridgeRequest::AgentResearch { question } => json!({
+                                "id": id,
+                                "type": "agent_research",
+                                "question": question,
+                            }),
+                            BridgeRequest::AgentPause => json!({
+                                "id": id,
+                                "type": "agent_pause",
+                            }),
+                            BridgeRequest::AgentCheckpoint { label } => json!({
+                                "id": id,
+                                "type": "agent_checkpoint",
+                                "label": label,
+                            }),
+                            BridgeRequest::AgentCheckpoints => json!({
+                                "id": id,
+                                "type": "agent_checkpoints",
+                            }),
+                            BridgeRequest::AgentRestore { index } => json!({
+                                "id": id,
+                                "type": "agent_restore",
+                                "index": index,
+                            }),
+                            BridgeRequest::AgentNextSteps => json!({
+                                "id": id,
+                                "type": "agent_next_steps",
+                            }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
                             let _ = bg_tx.send(BackgroundEvent::AssistantError(
@@ -1273,6 +1338,14 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
+            let choices: Vec<String> = msg.get("choices")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let checkpoint_count = msg.get("checkpoint_count")
+                .and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let notification_priority = msg.get("notification_priority")
+                .and_then(|v| v.as_str()).unwrap_or("quiet").to_string();
             let _ = bg_tx.send(BackgroundEvent::AgentStateUpdated {
                 run_id,
                 phase,
@@ -1283,6 +1356,9 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
                 plan_steps,
                 verification_summary,
                 workers,
+                choices,
+                checkpoint_count,
+                notification_priority,
             }).await;
         }
         _ => {}

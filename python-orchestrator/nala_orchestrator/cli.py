@@ -268,6 +268,9 @@ def _broadcast_agent_state(req_id: str) -> None:
     if hasattr(_agent_manager, "_workers"):
         for w in _agent_manager._workers.list_all():
             worker_lines.append(w.status_line())
+    choices = _agent_manager.suggest_next_steps() if _agent_manager else []
+    checkpoint_count = len(run.checkpoints) if hasattr(run, "checkpoints") else 0
+    priority = _agent_manager.notification_priority() if _agent_manager else "quiet"
     write_response({
         "id": req_id,
         "type": "agent_state",
@@ -282,6 +285,9 @@ def _broadcast_agent_state(req_id: str) -> None:
             run.verification.summary() if run.verification else ""
         ),
         "workers": worker_lines,
+        "choices": choices,
+        "checkpoint_count": checkpoint_count,
+        "notification_priority": priority,
     })
 
 
@@ -1268,6 +1274,62 @@ async def handle_request(
             _stream_text(req_id, "Agent runtime not ready or missing label.")
         else:
             _stream_text(req_id, _agent_manager.worktree_cleanup(label))
+
+    # ── Research (M35) ────────────────────────────────────────────────
+
+    elif req_type == "agent_research":
+        question = req.get("question", "").strip()
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        elif not question:
+            _stream_text(req_id, "Usage: `/agent research <question>`")
+        else:
+            try:
+                async for chunk in _agent_manager.do_research(question):
+                    write_response({"id": req_id, "type": "chunk", "text": chunk})
+                write_response({"id": req_id, "type": "done"})
+            except Exception as e:
+                write_response({"id": req_id, "type": "error", "text": str(e)})
+            _broadcast_agent_state(req_id)
+
+    # ── Pause / checkpoint (M36) ──────────────────────────────────────
+
+    elif req_type == "agent_pause":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.pause())
+            _broadcast_agent_state(req_id)
+
+    elif req_type == "agent_checkpoint":
+        label = req.get("label", "").strip()
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.checkpoint(label))
+            _broadcast_agent_state(req_id)
+
+    elif req_type == "agent_checkpoints":
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.list_checkpoints())
+
+    elif req_type == "agent_restore":
+        idx = int(req.get("index", 0))
+        if _agent_manager is None:
+            _stream_text(req_id, "Agent runtime not ready.")
+        else:
+            _stream_text(req_id, _agent_manager.restore_checkpoint(idx))
+            _broadcast_agent_state(req_id)
+
+    elif req_type == "agent_next_steps":
+        if _agent_manager is None:
+            _stream_text(req_id, "No active agent run.")
+        else:
+            choices = _agent_manager.suggest_next_steps()
+            text = "**Next steps:**\n" + "\n".join(f"  - {c}" for c in choices)
+            _stream_text(req_id, text)
 
     else:
         write_response({"id": req_id, "type": "error", "text": f"Unknown type: {req_type}"})
