@@ -113,6 +113,9 @@ pub enum BackgroundEvent {
     AssistantChunk(String),
     AssistantDone,
     AssistantError(String),
+    SessionReplaced {
+        text: String,
+    },
     ContextUsageUpdated {
         utilization_pct: f64,
         total_tokens: usize,
@@ -633,6 +636,15 @@ impl App {
                 self.push_message(Message::error(format!(
                     "AI request failed: {}. Check your API key in .env and try again.", e
                 )));
+            }
+            BackgroundEvent::SessionReplaced { text } => {
+                self.mode = AppMode::Ready;
+                self.streaming_response = None;
+                self.messages.clear();
+                self.pending_actions.clear();
+                self.apply_all = false;
+                self.push_message(Message::system(text));
+                self.refresh_context_usage();
             }
             BackgroundEvent::ContextUsageUpdated {
                 utilization_pct,

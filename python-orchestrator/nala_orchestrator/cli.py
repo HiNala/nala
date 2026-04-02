@@ -107,6 +107,7 @@ logging.basicConfig(
 log = logging.getLogger("nala.cli")
 
 _pending_actions: dict[str, Action] = {}
+_action_executor: ActionExecutor | None = None
 
 # Project-level embedder (built lazily on first index_context with symbols).
 _embedder: Embedder | None = None
@@ -123,6 +124,14 @@ VERSION = "0.1.0"
 def write_response(data: dict) -> None:
     """Write a JSON-lines response to stdout."""
     print(json.dumps(data), flush=True)
+
+
+def _get_action_executor(root: Path, *, reset: bool = False) -> ActionExecutor:
+    """Return the shared action executor for the active coding session."""
+    global _action_executor
+    if reset or _action_executor is None:
+        _action_executor = ActionExecutor(root)
+    return _action_executor
 
 
 def _stream_text(req_id: str, text: str, chunk_size: int = 200) -> None:
@@ -456,6 +465,7 @@ async def handle_request(
             # Clear in-memory conversation history and pending actions
             agent.context.messages.clear()
             _pending_actions.clear()
+            _get_action_executor(root, reset=True)
             write_response({
                 "id": req_id,
                 "type": "session_created",
@@ -485,6 +495,8 @@ async def handle_request(
                 return
             agent.context.messages.clear()
             agent.restore_history(sm)
+            _pending_actions.clear()
+            _get_action_executor(root, reset=True)
             turns = sm.get_conversation_history()
             write_response({
                 "id": req_id,
@@ -505,26 +517,28 @@ async def handle_request(
         try:
             full_text: list[str] = []
             async for chunk in agent.stream_query_with_actions(text):
-                write_response({"id": req_id, "type": "chunk", "text": chunk})
                 full_text.append(chunk)
-            write_response({"id": req_id, "type": "done"})
 
-            # Extract and register proposed actions
-            if full_text:
-                assembled = "".join(full_text)
-                _cleaned, actions = extract_actions(assembled)
-                for action in actions:
-                    _pending_actions[action.action_id] = action
-                    executor = ActionExecutor(root)
-                    preview = executor.preview(action)
-                    write_response({
-                        "id": req_id,
-                        "type": "proposed_action",
-                        "action_id": action.action_id,
-                        "action_type": action.type,
-                        "description": action.description,
-                        "preview": preview,
-                    })
+            assembled = "".join(full_text)
+            cleaned, actions = extract_actions(assembled)
+            if not cleaned.strip() and actions:
+                cleaned = (
+                    f"Prepared {len(actions)} proposed action(s). "
+                    "Review the diff previews below before applying them."
+                )
+            _stream_text(req_id, cleaned)
+            for action in actions:
+                _pending_actions[action.action_id] = action
+                executor = _get_action_executor(root)
+                preview = executor.preview(action)
+                write_response({
+                    "id": req_id,
+                    "type": "proposed_action",
+                    "action_id": action.action_id,
+                    "action_type": action.type,
+                    "description": action.description,
+                    "preview": preview,
+                })
         except Exception as e:
             write_response({"id": req_id, "type": "error", "text": str(e)})
 
@@ -542,7 +556,7 @@ async def handle_request(
             )
             return
         try:
-            executor = ActionExecutor(root)
+            executor = _get_action_executor(root)
             result = executor.apply(action)
             # Persist to session audit log
             session = agent.ensure_session()
@@ -848,6 +862,7 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
     sm = SessionManager(root)
     sm.new_session()
     agent.set_session(sm)
+    _get_action_executor(root, reset=True)
 
     # Initialise the embedder (BM25 works offline; vector index is lazy).
     global _embedder

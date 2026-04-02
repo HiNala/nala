@@ -789,22 +789,24 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
         }
         "session_created" => {
             let session_id = msg.get("session_id").and_then(|v| v.as_str()).unwrap_or("?");
-            let text = format!("New session created: **{}**", session_id);
-            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
-            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+            let text = format!(
+                "Started fresh session **{}**.\nVisible chat history was reset to match the new AI session.",
+                session_id
+            );
+            let _ = bg_tx.send(BackgroundEvent::SessionReplaced { text }).await;
         }
         "session_loaded" => {
             let session_id = msg.get("session_id").and_then(|v| v.as_str()).unwrap_or("?");
             let turns = msg.get("turn_count").and_then(|v| v.as_u64()).unwrap_or(0);
             let summary = msg.get("summary").and_then(|v| v.as_str()).unwrap_or("");
             let text = format!(
-                "Session **{}** loaded ({} turns).{}",
+                "Loaded session **{}** ({} turns).{}{}",
                 session_id,
                 turns,
-                if summary.is_empty() { String::new() } else { format!("\n{}", summary) }
+                if summary.is_empty() { String::new() } else { format!("\n{}", summary) },
+                "\nVisible chat history was reset to match the loaded AI session."
             );
-            let _ = bg_tx.send(BackgroundEvent::AssistantChunk(text)).await;
-            let _ = bg_tx.send(BackgroundEvent::AssistantDone).await;
+            let _ = bg_tx.send(BackgroundEvent::SessionReplaced { text }).await;
         }
         "session_summary" => {
             let text = msg

@@ -30,6 +30,7 @@ from ..context.config import CompactionConfig
 from ..context.counter import TokenCounter, TokenUsage
 from ..context.detector import OpportunityDetector
 from ..llm.provider import LLMMessage, create_provider
+from .action_extractor import extract_actions
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,9 @@ class AgentOrchestrator:
         injections = self.context.get_system_injections()
         if injections:
             base = base + "\n\n" + injections
+        summary = self._bg_summary.get_summary_text()
+        if summary and summary != "(no session summary yet)":
+            base = base + "\n\n" + summary
         return base
 
     # ── Context window management ──────────────────────────────────────────
@@ -355,9 +359,16 @@ class AgentOrchestrator:
 
         if full_response:
             assembled = "".join(full_response)
-            self.context.add_assistant(assembled)
+            cleaned, actions = extract_actions(assembled)
+            assistant_text = cleaned.strip()
+            if not assistant_text and actions:
+                assistant_text = (
+                    f"Prepared {len(actions)} proposed action(s). "
+                    "Review the generated previews before applying them."
+                )
+            self.context.add_assistant(assistant_text)
             turn_type = "assistant_error" if had_error else "assistant"
-            session.append_turn(turn_type, assembled)
+            session.append_turn(turn_type, assistant_text)
             self._detector.mark_assistant_response()
             history = [{"role": m.role, "content": m.content} for m in self.context.messages]
             self._bg_summary.on_turn(history)
