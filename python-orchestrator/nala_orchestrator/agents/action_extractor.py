@@ -33,7 +33,6 @@ The LLM is prompted to embed action blocks using this format:
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from .actions import (
     Action,
@@ -58,7 +57,7 @@ _ELEM_DESC = re.compile(r'<description>(.*?)</description>', re.DOTALL | re.IGNO
 _ELEM_CMD = re.compile(r'<command>(.*?)</command>', re.DOTALL | re.IGNORECASE)
 
 
-def _strip(text: Optional[str]) -> str:
+def _strip(text: str | None) -> str:
     return text.strip() if text else ""
 
 
@@ -86,7 +85,7 @@ class ActionExtractor:
             desc_m = _ELEM_DESC.search(body)
             description = _strip(desc_m.group(1) if desc_m else "")
 
-            action: Optional[Action] = None
+            action: Action | None = None
 
             if action_type == "edit":
                 old_m = _ELEM_OLD.search(body)

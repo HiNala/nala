@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
-
 
 BODY_THRESHOLD = 15  # lines — bodies longer than this are summarised
 
@@ -102,13 +100,13 @@ def _compress_python(lines: list[str]) -> tuple[str, int]:
         # If this is a body line, consume until next def/class/blank
         body: list[str] = []
         while i < len(lines):
-            l = lines[i]
-            s = l.strip()
+            ln = lines[i]
+            s = ln.strip()
             if s.startswith(("def ", "class ", "@", "import ", "from ")):
                 break
             if not s and body:  # blank line after body
                 break
-            body.append(l)
+            body.append(ln)
             i += 1
 
         if len(body) > 4:
@@ -148,10 +146,10 @@ def _compress_rust(lines: list[str]) -> tuple[str, int]:
             body: list[str] = []
             depth = brace_depth
             while i < len(lines):
-                l = lines[i]
-                s = l.strip()
-                o, c = l.count("{"), l.count("}")
-                body.append(l)
+                ln = lines[i]
+                s = ln.strip()
+                o, c = ln.count("{"), ln.count("}")
+                body.append(ln)
                 depth += o - c
                 i += 1
                 if depth <= 1 and (s == "}" or s == "};"):

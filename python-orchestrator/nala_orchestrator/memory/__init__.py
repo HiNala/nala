@@ -6,9 +6,9 @@ Three tiers:
   Layer 3 (Long-term):   Knowledge base — accumulated project facts.
 """
 
-from .short_term import ShortTermMemory
-from .session_memory import SessionMemory, SessionRecord
-from .knowledge import KnowledgeBase
 from .compression import SmartStrip
+from .knowledge import KnowledgeBase
+from .session_memory import SessionMemory, SessionRecord
+from .short_term import ShortTermMemory
 
 __all__ = ["ShortTermMemory", "SessionMemory", "SessionRecord", "KnowledgeBase", "SmartStrip"]

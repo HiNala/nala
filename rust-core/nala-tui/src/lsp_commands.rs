@@ -4,7 +4,7 @@
 //! their own focused module.
 
 use crate::app::{App, BackgroundEvent, Message};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 impl App {
     pub(crate) fn lsp_status(&mut self) {
@@ -103,7 +103,7 @@ impl App {
 }
 
 /// Parse a `file:line:col` location spec into (absolute path, 0-based line, 0-based col).
-fn parse_location_spec(project_root: &PathBuf, spec: &str) -> Option<(PathBuf, usize, usize)> {
+fn parse_location_spec(project_root: &Path, spec: &str) -> Option<(PathBuf, usize, usize)> {
     let raw = spec.trim();
     if raw.is_empty() {
         return None;

@@ -33,7 +33,7 @@ class CompactionConfig:
     min_turns_before_compact: int = 4
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CompactionConfig":
+    def from_dict(cls, data: dict) -> CompactionConfig:
         """Create from a config dictionary (e.g. from config.toml)."""
         return cls(
             soft_threshold=float(data.get("soft_threshold", 0.60)),

@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +62,7 @@ class BackgroundSummary:
     """Maintains an always-ready session summary, updated periodically."""
 
     def __init__(self) -> None:
-        self._summary: Optional[SessionSummary] = None
+        self._summary: SessionSummary | None = None
         self._turn_since_update: int = 0
         self._history_snapshot: list[dict] = []
 
@@ -76,7 +75,7 @@ class BackgroundSummary:
             self._rebuild(history)
             self._turn_since_update = 0
 
-    def get_summary(self) -> Optional[SessionSummary]:
+    def get_summary(self) -> SessionSummary | None:
         """Return the current summary (may be None if not yet built)."""
         return self._summary
 

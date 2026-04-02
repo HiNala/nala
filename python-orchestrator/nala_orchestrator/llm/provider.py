@@ -13,8 +13,9 @@ Adding a new provider:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
@@ -48,7 +49,7 @@ class LLMResponse:
 class BaseLLMProvider(ABC):
     """Abstract base for all LLM providers."""
 
-    def __init__(self, config: "Config") -> None:
+    def __init__(self, config: Config) -> None:
         self.config = config
 
     @property
@@ -60,7 +61,7 @@ class BaseLLMProvider(ABC):
     async def chat(
         self,
         messages: list[LLMMessage],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> LLMResponse:
         """Send a conversation and return a complete response."""
@@ -70,7 +71,7 @@ class BaseLLMProvider(ABC):
     async def stream_chat(
         self,
         messages: list[LLMMessage],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
         """Stream a response token-by-token. Yields text chunks."""
@@ -84,7 +85,7 @@ class BaseLLMProvider(ABC):
 # ── Factory ────────────────────────────────────────────────────────────────
 
 
-def create_provider(config: "Config") -> BaseLLMProvider:
+def create_provider(config: Config) -> BaseLLMProvider:
     """Instantiate the correct provider based on config.llm_provider."""
     match config.llm_provider:
         case "anthropic":

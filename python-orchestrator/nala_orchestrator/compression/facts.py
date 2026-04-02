@@ -18,7 +18,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-
 # ── Fact detection patterns ───────────────────────────────────────────────────
 
 _PATH_RE = re.compile(

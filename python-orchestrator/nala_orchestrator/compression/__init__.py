@@ -14,13 +14,13 @@ Architecture:
   QualityChecker       — validate compression safety invariants
 """
 
-from .pipeline import CompressionPipeline, PipelineReport
+from .code_context import CodeCompressionResult, CodeContextCompressor
 from .dedup import Deduplicator, DedupResult
-from .tool_outputs import compress_tool_outputs, is_verbose_output, ToolOutputResult
-from .code_context import CodeContextCompressor, CodeCompressionResult
-from .structural import StructuralCompressor, StructuralResult
-from .facts import FactExtractor, FactSet, Fact
+from .facts import Fact, FactExtractor, FactSet
+from .pipeline import CompressionPipeline, PipelineReport
 from .quality import QualityChecker, QualityReport
+from .structural import StructuralCompressor, StructuralResult
+from .tool_outputs import ToolOutputResult, compress_tool_outputs, is_verbose_output
 
 __all__ = [
     "CompressionPipeline", "PipelineReport",

@@ -16,14 +16,13 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from .base import BasePerspective, PerspectiveResult
 from ..sessions.report import Finding
+from .base import BasePerspective, PerspectiveResult
 
 if TYPE_CHECKING:
-    from nala_orchestrator.config import Config
-    from nala_orchestrator.graph.connection import GraphConnection
+    pass
 
 # Complexity thresholds
 THRESHOLD_MEDIUM = 6

@@ -12,14 +12,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
 
-from .task_list import SharedTaskList, Task, TaskStatus
 from .file_locks import FileLockRegistry
 from .messages import MessageBus
+from .task_list import SharedTaskList, Task
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class WorkerAgent:
         self,
         agent_id: str,
         task: Task,
-        config: "Config",
+        config: Config,
         task_list: SharedTaskList,
         locks: FileLockRegistry,
         bus: MessageBus,
@@ -129,7 +129,7 @@ class AgentSpawner:
 
     def __init__(
         self,
-        config: "Config",
+        config: Config,
         task_list: SharedTaskList,
         locks: FileLockRegistry,
         bus: MessageBus,

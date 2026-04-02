@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
@@ -29,10 +29,10 @@ class PerspectiveResult:
     """The output of running one perspective."""
 
     perspective_name: str
-    findings: list["Finding"] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
     summary: str = ""
     duration_ms: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
     @property
     def critical_count(self) -> int:
@@ -46,7 +46,7 @@ class PerspectiveResult:
 class BasePerspective(ABC):
     """Abstract base for all analysis perspectives."""
 
-    def __init__(self, config: "Config", graph: Optional["GraphConnection"] = None) -> None:
+    def __init__(self, config: Config, graph: GraphConnection | None = None) -> None:
         self.config = config
         self.graph = graph
 

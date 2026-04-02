@@ -25,8 +25,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .base import BasePerspective, PerspectiveResult
 from ..sessions.report import Finding
+from .base import BasePerspective, PerspectiveResult
 
 if TYPE_CHECKING:
     pass
@@ -100,7 +100,10 @@ class DeadCodePerspective(BasePerspective):
                 start_line=row.get("start_line", 0),
                 severity="low",
                 perspective=self.name,
-                suggestion="Verify this function is not called via dynamic dispatch or reflection, then remove if unused.",
+                suggestion=(
+                    "Verify this function is not called via dynamic dispatch or "
+                    "reflection, then remove if unused."
+                ),
             ))
         return findings
 
@@ -177,11 +180,27 @@ class DeadCodePerspective(BasePerspective):
 
 # ── Extraction helpers ─────────────────────────────────────────────────────
 
-_PY_FUNC_DEF   = re.compile(r'^(?P<indent>\s*)(?P<pub>)def\s+(?P<name>_?\w+)\s*\(', re.MULTILINE)
-_PY_CLASS_DEF  = re.compile(r'^(?P<indent>\s*)class\s+(?P<name>_?\w+)\s*[:(]', re.MULTILINE)
-_RS_FN_DEF     = re.compile(r'^\s*(?P<pub>pub\s+)?(?:async\s+)?fn\s+(?P<name>\w+)\s*[<(]', re.MULTILINE)
-_RS_STRUCT_DEF = re.compile(r'^\s*(?P<pub>pub\s+)?struct\s+(?P<name>\w+)', re.MULTILINE)
-_JS_FUNC_DEF   = re.compile(r'(?:function\s+(?P<name>\w+)|(?:const|let|var)\s+(?P<name2>\w+)\s*=\s*(?:async\s*)?\()', re.MULTILINE)
+_PY_FUNC_DEF = re.compile(
+    r'^(?P<indent>\s*)(?P<pub>)def\s+(?P<name>_?\w+)\s*\(',
+    re.MULTILINE,
+)
+_PY_CLASS_DEF = re.compile(
+    r'^(?P<indent>\s*)class\s+(?P<name>_?\w+)\s*[:(]',
+    re.MULTILINE,
+)
+_RS_FN_DEF = re.compile(
+    r'^\s*(?P<pub>pub\s+)?(?:async\s+)?fn\s+(?P<name>\w+)\s*[<(]',
+    re.MULTILINE,
+)
+_RS_STRUCT_DEF = re.compile(
+    r'^\s*(?P<pub>pub\s+)?struct\s+(?P<name>\w+)',
+    re.MULTILINE,
+)
+_JS_FUNC_DEF = re.compile(
+    r'(?:function\s+(?P<name>\w+)|'
+    r'(?:const|let|var)\s+(?P<name2>\w+)\s*=\s*(?:async\s*)?\()',
+    re.MULTILINE,
+)
 
 
 def _extract_definitions(src: str, lang: str) -> list[tuple[str, int, str]]:

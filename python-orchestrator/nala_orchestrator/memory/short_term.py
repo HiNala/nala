@@ -6,8 +6,8 @@ to query what it currently knows in its working context.
 
 from __future__ import annotations
 
-from ..context.counter import TokenCounter
 from ..context.background_summary import BackgroundSummary
+from ..context.counter import TokenCounter
 
 
 class ShortTermMemory:

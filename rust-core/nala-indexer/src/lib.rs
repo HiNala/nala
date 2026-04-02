@@ -69,7 +69,13 @@ pub fn scan_project(root: &Path) -> Result<ScanResult> {
     let changed = cache.get_changed_files(&hashed)?;
     let new_files: Vec<_> = changed
         .iter()
-        .filter(|f| cache.is_new(&f.relative_path).unwrap_or(false))
+        .filter(|f| match cache.is_new(&f.relative_path) {
+            Ok(is_new) => is_new,
+            Err(e) => {
+                eprintln!("cache lookup error for {}: {}", f.relative_path, e);
+                true
+            }
+        })
         .cloned()
         .collect();
     let deleted = cache.remove_deleted_files(&hashed)?;

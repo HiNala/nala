@@ -74,11 +74,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 
 from .agents.action_executor import ActionExecutor
 from .agents.action_extractor import extract_actions
+from .agents.actions import Action
 from .agents.orchestrator import AgentOrchestrator
 from .chunking.embedder import Embedder
 from .chunking.splitter import ChunkSplitter, Symbol
@@ -91,9 +93,14 @@ from .multi_agent.lead import LeadAgent
 from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
 
-# Per-process store of proposed actions keyed by action_id.
-# Cleared when a new session starts.
-_pending_actions: dict[str, object] = {}
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stderr,
+)
+log = logging.getLogger("nala.cli")
+
+_pending_actions: dict[str, Action] = {}
 
 # Project-level embedder (built lazily on first index_context with symbols).
 _embedder: Embedder | None = None
@@ -177,12 +184,13 @@ async def handle_request(
                 if conn.connect():
                     builder = GraphBuilder(conn)
                     builder.ensure_schema()
-                    builder.populate_from_index(
-                        json.dumps({"symbols": normalised_symbols}, separators=(",", ":"))
+                    await asyncio.to_thread(
+                        builder.populate_from_index,
+                        json.dumps({"symbols": normalised_symbols}, separators=(",", ":")),
                     )
                     conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Graph sync skipped: %s", e)
 
         write_response({"id": req_id, "type": "ok"})
 
@@ -210,7 +218,8 @@ async def handle_request(
 
                 graph_conn = GraphConnection(config)
                 graph_conn.connect()
-            except Exception:
+            except Exception as e:
+                log.debug("Graph unavailable for perspectives: %s", e)
                 graph_conn = None
 
             engine = PerspectivesEngine(config, graph=graph_conn)
@@ -362,7 +371,7 @@ async def handle_request(
                         "type": "proposed_action",
                         "action_id": action.action_id,
                         "action_type": action.type,
-                        "description": action.description,  # type: ignore[attr-defined]
+                        "description": action.description,
                         "preview": preview,
                     })
         except Exception as e:
@@ -383,7 +392,7 @@ async def handle_request(
             return
         try:
             executor = ActionExecutor(root)
-            result = executor.apply(action)  # type: ignore[arg-type]
+            result = executor.apply(action)
             # Persist to session audit log
             session = agent.ensure_session()
             session.append_turn(
@@ -482,8 +491,8 @@ async def handle_request(
             sid = (agent._session.current_meta.session_id
                    if agent._session and agent._session.current_meta else "compact")
             HandoffWriter(root).write(sid, "compaction", history)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Pre-compaction handoff failed: %s", e)
         summary_msg = agent.compact_now(focus=focus)
         _stream_text(req_id, f"Compaction complete.\n{summary_msg}")
 
@@ -508,31 +517,34 @@ async def handle_request(
             )
             return
         try:
-            files = conn.run("MATCH (f:File) RETURN count(f) AS n")[0].get("n", 0)
-            fns = conn.run("MATCH (f:Function) RETURN count(f) AS n")[0].get("n", 0)
-            classes = conn.run("MATCH (c:Class) RETURN count(c) AS n")[0].get("n", 0)
-            mods = conn.run("MATCH (m:Module) RETURN count(m) AS n")[0].get("n", 0)
-            rels = conn.run("MATCH ()-[r]->() RETURN count(r) AS n")[0].get("n", 0)
-            cypher, params = find_most_imported_modules()
-            top = conn.run(cypher, **params)[:5]
-            top_lines = "\n".join(
-                f"  {i+1}. {r.get('module','?')} — imported {r.get('import_count',0)}x"
-                for i, r in enumerate(top)
-            ) or "  (no data)"
-            text = (
-                f"Graph statistics:\n"
-                f"  Files:     {files}\n"
-                f"  Functions: {fns}\n"
-                f"  Classes:   {classes}\n"
-                f"  Modules:   {mods}\n"
-                f"  Relations: {rels}\n\n"
-                f"Top 5 most imported modules:\n{top_lines}"
-            )
+            def _fetch_graph_stats() -> str:
+                files = conn.run("MATCH (f:File) RETURN count(f) AS n")[0].get("n", 0)
+                fns = conn.run("MATCH (f:Function) RETURN count(f) AS n")[0].get("n", 0)
+                classes = conn.run("MATCH (c:Class) RETURN count(c) AS n")[0].get("n", 0)
+                mods = conn.run("MATCH (m:Module) RETURN count(m) AS n")[0].get("n", 0)
+                rels = conn.run("MATCH ()-[r]->() RETURN count(r) AS n")[0].get("n", 0)
+                cypher, params = find_most_imported_modules()
+                top = conn.run(cypher, **params)[:5]
+                top_lines = "\n".join(
+                    f"  {i+1}. {r.get('module','?')} — imported {r.get('import_count',0)}x"
+                    for i, r in enumerate(top)
+                ) or "  (no data)"
+                return (
+                    f"Graph statistics:\n"
+                    f"  Files:     {files}\n"
+                    f"  Functions: {fns}\n"
+                    f"  Classes:   {classes}\n"
+                    f"  Modules:   {mods}\n"
+                    f"  Relations: {rels}\n\n"
+                    f"Top 5 most imported modules:\n{top_lines}"
+                )
+
+            text = await asyncio.to_thread(_fetch_graph_stats)
             conn.close()
             _stream_text(req_id, text)
         except Exception as e:
             conn.close()
-            write_response({"id": req_id, "type": "error", "text": str(e)})
+            write_response({"id": req_id, "type": "error", "text": f"Graph query error: {e}"})
 
     # ── Multi-agent: start a team run (streaming progress) ───────────────
     elif req_type == "team_start":
@@ -706,8 +718,8 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
         except json.JSONDecodeError as e:
             write_response({"type": "error", "text": f"JSON parse error: {e}"})
         except Exception as e:
+            log.exception("IPC handler error")
             write_response({"type": "error", "text": f"IPC error: {e}"})
-            break
 
     # Graceful shutdown — write handoff, save memory, mark session complete.
     if agent._session:
@@ -725,8 +737,8 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
                 record = session_mem.build_and_save(sid, history)
                 knowledge_base = KnowledgeBase(root)
                 knowledge_base.extract_from_session(record.to_markdown())
-        except Exception:
-            pass  # Never crash on shutdown
+        except Exception as e:
+            log.debug("Shutdown handoff/memory save failed: %s", e)
         agent._session.complete()
 
 

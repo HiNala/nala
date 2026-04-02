@@ -12,7 +12,7 @@ Claude models. The heuristic is always the fast fallback.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 

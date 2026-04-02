@@ -9,7 +9,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class Priority(str, Enum):
@@ -73,7 +72,7 @@ class OpportunityDetector:
         utilization_pct: float,
         history_len: int,
         min_turns: int = 4,
-    ) -> Optional[CompactionOpportunity]:
+    ) -> CompactionOpportunity | None:
         """Evaluate whether now is a good time to compact.
 
         Returns None if utilisation is low and no compaction is needed.

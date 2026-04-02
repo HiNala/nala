@@ -9,10 +9,11 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 from .schema import (
-    Decision, HandoffDocument, InProgressState, ModifiedFile,
+    Decision,
+    HandoffDocument,
+    ModifiedFile,
 )
 
 log = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class HandoffWriter:
         session_id: str,
         trigger: str,
         history: list[dict],
-        modified_files: Optional[list[str]] = None,
+        modified_files: list[str] | None = None,
     ) -> HandoffDocument:
         """Extract handoff state from conversation history and save."""
         doc = HandoffDocument.create(session_id, trigger)

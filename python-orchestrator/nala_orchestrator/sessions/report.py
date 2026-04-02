@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass
@@ -22,8 +21,8 @@ class Finding:
     start_line: int
     severity: str  # "low" | "medium" | "high" | "critical"
     perspective: str  # e.g. "complexity", "dependency", "dead_code"
-    suggestion: Optional[str] = None
-    code_snippet: Optional[str] = None
+    suggestion: str | None = None
+    code_snippet: str | None = None
 
 
 @dataclass

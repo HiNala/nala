@@ -11,12 +11,12 @@ Architecture (inspired by open-multi-agent's event-driven patterns):
   - Spawner:   Creates worker agent instances as async tasks
 """
 
-from .task_list import Task, TaskStatus, SharedTaskList
+from .decomposer import TaskDecomposer, TaskPlan
 from .file_locks import FileLockRegistry
-from .messages import MessageBus, AgentMessage
-from .spawner import AgentSpawner, WorkerResult
-from .decomposer import TaskPlan, TaskDecomposer
 from .lead import LeadAgent
+from .messages import AgentMessage, MessageBus
+from .spawner import AgentSpawner, WorkerResult
+from .task_list import SharedTaskList, Task, TaskStatus
 
 __all__ = [
     "Task", "TaskStatus", "SharedTaskList",

@@ -21,7 +21,7 @@ from .connection import GraphConnection
 from .schema import SCHEMA_CYPHER
 
 if TYPE_CHECKING:
-    from nala_orchestrator.config import Config
+    pass
 
 logger = logging.getLogger(__name__)
 

@@ -13,10 +13,3 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_DESCRIPTION: &str =
     "Terminal-first AI-powered coding environment. Fast, deep, keyboard-driven.";
 
-/// The default directory name used for session storage inside a project.
-#[allow(dead_code)]
-pub const SESSION_DIR: &str = ".nala";
-
-/// The default cache database filename.
-#[allow(dead_code)]
-pub const CACHE_DB: &str = "cache.db";

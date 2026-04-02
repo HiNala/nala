@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 from .provider import BaseLLMProvider, LLMMessage, LLMResponse
 
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 class AnthropicProvider(BaseLLMProvider):
     """Provider for Anthropic's Claude models."""
 
-    def __init__(self, config: "Config") -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__(config)
         try:
             import anthropic
@@ -28,10 +29,9 @@ class AnthropicProvider(BaseLLMProvider):
     async def chat(
         self,
         messages: list[LLMMessage],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> LLMResponse:
-        import anthropic
 
         anthropic_messages = [
             {"role": m.role, "content": m.content}
@@ -61,7 +61,7 @@ class AnthropicProvider(BaseLLMProvider):
     async def stream_chat(
         self,
         messages: list[LLMMessage],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
         anthropic_messages = [

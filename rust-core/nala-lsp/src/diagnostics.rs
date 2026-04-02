@@ -96,8 +96,8 @@ impl DiagnosticsStore {
     }
 
     /// Return a snapshot of the full diagnostics map (for display in the TUI).
-    pub fn inner_snapshot(&self) -> Result<HashMap<PathBuf, Vec<Diagnostic>>, ()> {
-        self.inner.read().map(|m| m.clone()).map_err(|_| ())
+    pub fn inner_snapshot(&self) -> Option<HashMap<PathBuf, Vec<Diagnostic>>> {
+        self.inner.read().ok().map(|m| m.clone())
     }
 
     /// Parse a `textDocument/publishDiagnostics` params object and update the store.

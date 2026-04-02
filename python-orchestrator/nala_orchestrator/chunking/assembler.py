@@ -13,7 +13,6 @@ Assembly algorithm:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
 
 from .splitter import Chunk
 
@@ -106,9 +105,6 @@ class ContextAssembler:
                 if nxt.start_line <= current.end_line + 1:
                     # Extend the current chunk.
                     if nxt.end_line > current.end_line:
-                        combined = current.content + nxt.content[
-                            len("".join([])):
-                        ]
                         current = Chunk(
                             id=current.id,
                             file_path=current.file_path,

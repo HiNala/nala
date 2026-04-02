@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Union
 
 
 @dataclass
@@ -67,7 +66,7 @@ class ShellAction:
 
 
 # Union type for type-checking convenience
-Action = Union[EditAction, CreateAction, DeleteAction, ShellAction]
+Action = EditAction | CreateAction | DeleteAction | ShellAction
 
 
 @dataclass

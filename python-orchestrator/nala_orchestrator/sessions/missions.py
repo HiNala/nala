@@ -11,7 +11,6 @@ Each mission covers one distinct actionable area identified in the audit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from .report import AuditReport, Finding
 
@@ -121,7 +120,10 @@ class MissionGenerator:
         return MissionDocument(
             number=n,
             title=title,
-            objective=f"Resolve all {severity}-severity findings identified across {len(findings)} locations.",
+            objective=(
+                f"Resolve all {severity}-severity findings identified across "
+                f"{len(findings)} locations."
+            ),
             context=(
                 f"These {len(findings)} findings were grouped together because they share similar "
                 f"severity ({severity}) and can be addressed in a single pass. "

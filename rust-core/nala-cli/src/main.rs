@@ -153,7 +153,7 @@ async fn run_dashboard(path: &std::path::Path, port: u16) -> Result<()> {
         Err(e) => {
             eprintln!("Failed to start dashboard: {e}");
             eprintln!("Make sure uvicorn is installed: pip install uvicorn fastapi");
-            Err(e.into())
+            Err(e)
         }
     }
 }

@@ -79,7 +79,7 @@ mod tests {
         ScannedFile {
             relative_path: name.to_string(),
             absolute_path: path,
-            extension: name.split('.').last().unwrap_or("").to_string(),
+            extension: name.rsplit('.').next().unwrap_or("").to_string(),
             size_bytes: content.len() as u64,
             modified_at: std::time::SystemTime::now(),
         }

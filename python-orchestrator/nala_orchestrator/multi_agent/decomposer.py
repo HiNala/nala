@@ -10,10 +10,8 @@ Falls back to directory-based decomposition when the graph is absent.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 log = logging.getLogger(__name__)
 

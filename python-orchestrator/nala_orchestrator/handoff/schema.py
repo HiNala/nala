@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass
@@ -58,7 +57,7 @@ class HandoffDocument:
     constraints: list[str] = field(default_factory=list)
 
     @classmethod
-    def create(cls, session_id: str, trigger: str) -> "HandoffDocument":
+    def create(cls, session_id: str, trigger: str) -> HandoffDocument:
         return cls(
             timestamp=datetime.now().isoformat(),
             session_id=session_id,

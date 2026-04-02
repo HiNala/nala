@@ -17,20 +17,20 @@ Inspired by open-multi-agent's event-driven coordination pattern:
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
 
-from .task_list import SharedTaskList, TaskStatus
+from .decomposer import TaskDecomposer, TaskPlan
 from .file_locks import FileLockRegistry
 from .messages import MessageBus
 from .spawner import AgentSpawner, WorkerResult
-from .decomposer import TaskDecomposer, TaskPlan
+from .task_list import SharedTaskList
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 class TeamStatus:
     """Current status of an agent team run."""
     objective: str
-    plan: Optional[TaskPlan] = None
+    plan: TaskPlan | None = None
     current_wave: int = 0
     completed_tasks: int = 0
     total_tasks: int = 0
@@ -64,7 +64,7 @@ class TeamStatus:
 class LeadAgent:
     """Orchestrates a team of worker agents for a complex objective."""
 
-    def __init__(self, config: "Config", project_root: Path) -> None:
+    def __init__(self, config: Config, project_root: Path) -> None:
         self._config = config
         self._root = project_root
         self._task_list = SharedTaskList(project_root)

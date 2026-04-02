@@ -167,7 +167,7 @@ const MAX_MESSAGES: usize = 1_000;
 
 impl App {
     pub fn new(project_root: &Path) -> Result<Self> {
-        let (tx, rx) = mpsc::channel(64);
+        let (tx, rx) = mpsc::channel(256);
         let canonical_root = project_root
             .canonicalize()
             .unwrap_or_else(|_| project_root.to_path_buf());
@@ -264,9 +264,8 @@ impl App {
     // ── Event handling ─────────────────────────────────────────────────────
 
     fn handle_event(&mut self, event: Event) {
-        match event {
-            Event::Key(key) => self.handle_key(key),
-            _ => {}
+        if let Event::Key(key) = event {
+            self.handle_key(key);
         }
     }
 
@@ -425,19 +424,29 @@ impl App {
         let root = self.project_root.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
-            match nala_indexer::index_project(&root) {
-                Ok(result) => {
+            let result = tokio::task::spawn_blocking(move || {
+                nala_indexer::index_project(&root)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(index_result)) => {
                     let _ = tx
                         .send(BackgroundEvent::IndexComplete {
-                            indexed_files: result.indexed_files,
-                            total_files: result.scan_result.total_files,
-                            symbols: result.total_symbols,
-                            symbol_payload: result.symbols,
+                            indexed_files: index_result.indexed_files,
+                            total_files: index_result.scan_result.total_files,
+                            symbols: index_result.total_symbols,
+                            symbol_payload: index_result.symbols,
                         })
                         .await;
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     let _ = tx.send(BackgroundEvent::IndexError(e.to_string())).await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(BackgroundEvent::IndexError(format!("Index task panicked: {}", e)))
+                        .await;
                 }
             }
         });
@@ -484,7 +493,9 @@ impl App {
             }
             BackgroundEvent::IndexError(e) => {
                 self.index_progress = None;
-                self.push_message(Message::error(format!("Index error: {}", e)));
+                self.push_message(Message::error(format!(
+                    "Indexing failed: {}. Try running /scan first or check file permissions.", e
+                )));
             }
             BackgroundEvent::AssistantChunk(chunk) => {
                 if let Some(ref mut resp) = self.streaming_response {
@@ -506,7 +517,9 @@ impl App {
                         self.push_message(Message::assistant(partial));
                     }
                 }
-                self.push_message(Message::error(format!("AI error: {}", e)));
+                self.push_message(Message::error(format!(
+                    "AI request failed: {}. Check your API key in .env and try again.", e
+                )));
             }
             BackgroundEvent::BridgeReady { has_llm } => {
                 self.llm_available = has_llm;

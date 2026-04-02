@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 from .schema import HandoffDocument
 
@@ -41,7 +40,7 @@ class HandoffReader:
             return ""
         return self._build_injection(doc)
 
-    def load_latest(self) -> Optional[HandoffDocument]:
+    def load_latest(self) -> HandoffDocument | None:
         """Load the most recent handoff document."""
         if not self._dir.exists():
             return None
@@ -143,7 +142,7 @@ class HandoffReader:
 
     def _from_dict(self, data: dict) -> HandoffDocument:
         """Deserialise a HandoffDocument from a raw dict."""
-        from .schema import InProgressState, ModifiedFile, Decision
+        from .schema import Decision, InProgressState, ModifiedFile
         ip_data = data.get("in_progress", {})
         ip = InProgressState(
             current_task=ip_data.get("current_task", ""),

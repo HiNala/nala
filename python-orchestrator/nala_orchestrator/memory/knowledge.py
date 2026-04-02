@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +54,7 @@ class KnowledgeBase:
 
     # ── Fact management ───────────────────────────────────────────────────────
 
-    def add_fact(self, fact: str, category: Optional[str] = None) -> None:
+    def add_fact(self, fact: str, category: str | None = None) -> None:
         """Add a single fact to the knowledge base."""
         fact = fact.strip()
         if not fact or len(fact) < 10:
@@ -69,7 +68,7 @@ class KnowledgeBase:
             f.write(f"- {fact}\n")
         log.debug("Knowledge fact added → %s: %.60s", cat_file, fact)
 
-    def add_facts(self, facts: list[str], category: Optional[str] = None) -> None:
+    def add_facts(self, facts: list[str], category: str | None = None) -> None:
         for fact in facts:
             self.add_fact(fact, category)
 
@@ -78,7 +77,7 @@ class KnowledgeBase:
         removed = 0
         for path in self._kb_dir.glob("*.md"):
             lines = path.read_text(encoding="utf-8").splitlines()
-            new_lines = [l for l in lines if topic.lower() not in l.lower()]
+            new_lines = [ln for ln in lines if topic.lower() not in ln.lower()]
             if len(new_lines) != len(lines):
                 path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
                 removed += len(lines) - len(new_lines)
@@ -122,7 +121,9 @@ class KnowledgeBase:
             content = path.read_text(encoding="utf-8").strip()
             if not content:
                 continue
-            count = len([l for l in content.splitlines() if l.strip().startswith("-")])
+            count = len(
+                [ln for ln in content.splitlines() if ln.strip().startswith("-")]
+            )
             total_facts += count
             lines.append(f"  {path.stem}: {count} fact{'s' if count != 1 else ''}")
         lines.append(f"  Total: {total_facts} facts across {len(lines) - 1} categories")

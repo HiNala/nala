@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
@@ -34,9 +34,9 @@ class Config(BaseModel):
         default="anthropic",
         description="Which LLM provider to use.",
     )
-    anthropic_api_key: Optional[str] = Field(default=None)
-    openai_api_key: Optional[str] = Field(default=None)
-    google_api_key: Optional[str] = Field(default=None)
+    anthropic_api_key: str | None = Field(default=None)
+    openai_api_key: str | None = Field(default=None)
+    google_api_key: str | None = Field(default=None)
     ollama_base_url: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="codellama:13b")
 
@@ -49,7 +49,7 @@ class Config(BaseModel):
 
     neo4j_uri: str = Field(default="bolt://localhost:7687")
     neo4j_user: str = Field(default="neo4j")
-    neo4j_password: Optional[str] = Field(default=None)
+    neo4j_password: str | None = Field(default=None)
     neo4j_enabled: bool = Field(default=False)
 
     # ── Project settings ──────────────────────────────────────────────────
@@ -64,7 +64,7 @@ class Config(BaseModel):
     dashboard_enabled: bool = Field(default=False)
 
     @model_validator(mode="after")
-    def resolve_neo4j_enabled(self) -> "Config":
+    def resolve_neo4j_enabled(self) -> Config:
         """Auto-enable Neo4j if a password is provided."""
         if self.neo4j_password and not self.neo4j_enabled:
             object.__setattr__(self, "neo4j_enabled", True)
@@ -73,7 +73,7 @@ class Config(BaseModel):
     # ── Factory ───────────────────────────────────────────────────────────
 
     @classmethod
-    def load(cls, project_root: Optional[Path] = None) -> "Config":
+    def load(cls, project_root: Path | None = None) -> Config:
         """Load configuration from environment and .env files."""
         root = project_root or Path.cwd()
 
@@ -115,7 +115,7 @@ class Config(BaseModel):
             or self.llm_provider == "ollama"
         )
 
-    def active_api_key(self) -> Optional[str]:
+    def active_api_key(self) -> str | None:
         """Return the API key for the currently selected provider."""
         match self.llm_provider:
             case "anthropic":

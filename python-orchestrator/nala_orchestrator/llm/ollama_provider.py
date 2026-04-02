@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -15,14 +16,14 @@ if TYPE_CHECKING:
 class OllamaProvider(BaseLLMProvider):
     """Provider for local models served by Ollama."""
 
-    def __init__(self, config: "Config") -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__(config)
         self.base_url = config.ollama_base_url.rstrip("/")
 
     async def chat(
         self,
         messages: list[LLMMessage],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> LLMResponse:
         payload: dict = {
@@ -43,7 +44,7 @@ class OllamaProvider(BaseLLMProvider):
     async def stream_chat(
         self,
         messages: list[LLMMessage],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         max_tokens: int = 4096,
     ) -> AsyncIterator[str]:
         import json
@@ -75,7 +76,7 @@ class OllamaProvider(BaseLLMProvider):
 
     @staticmethod
     def _build_messages(
-        messages: list[LLMMessage], system_prompt: Optional[str]
+        messages: list[LLMMessage], system_prompt: str | None
     ) -> list[dict]:
         result = []
         if system_prompt:

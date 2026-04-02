@@ -8,7 +8,7 @@ dependency analysis and graph-based perspectives require it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 class GraphConnection:
     """Manages the Neo4j driver connection."""
 
-    def __init__(self, config: "Config") -> None:
+    def __init__(self, config: Config) -> None:
         self.config = config
         self._driver = None
         self._available = False
@@ -71,7 +71,7 @@ class GraphConnection:
             self._driver = None
             self._available = False
 
-    def __enter__(self) -> "GraphConnection":
+    def __enter__(self) -> GraphConnection:
         self.connect()
         return self
 

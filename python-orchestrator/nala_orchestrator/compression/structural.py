@@ -113,7 +113,7 @@ class StructuralCompressor:
 
     @staticmethod
     def _compress_list(content: str, ss) -> str:
-        from ..memory.compression import _classify, _strip_hedges, _IDENTIFIER_RE
+        from ..memory.compression import _IDENTIFIER_RE, _classify, _strip_hedges
         lines = content.splitlines()
         out: list[str] = []
         for line in lines:
@@ -131,7 +131,7 @@ class StructuralCompressor:
 
     @staticmethod
     def _compress_numbered(content: str, ss) -> str:
-        from ..memory.compression import _classify, _strip_hedges, _IDENTIFIER_RE
+        from ..memory.compression import _IDENTIFIER_RE, _classify, _strip_hedges
         lines = content.splitlines()
         out: list[str] = []
         for line in lines:
@@ -148,7 +148,7 @@ class StructuralCompressor:
 
 def _safe_compress_paragraph(text: str, ss) -> str:
     """Compress a paragraph but never discard sentences with identifiers."""
-    from ..memory.compression import _classify, _strip_hedges, _IDENTIFIER_RE, _split_sentences
+    from ..memory.compression import _IDENTIFIER_RE, _classify, _split_sentences, _strip_hedges
     sentences = _split_sentences(text)
     kept: list[str] = []
     for sent in sentences:
@@ -167,8 +167,8 @@ def _classify_block(text: str) -> list[tuple[str, str]]:
     if stripped.startswith("#"):
         return [("heading", stripped)]
     lines = stripped.splitlines()
-    if all(re.match(r"^[-*•]\s", l.lstrip()) or not l.strip() for l in lines):
+    if all(re.match(r"^[-*•]\s", ln.lstrip()) or not ln.strip() for ln in lines):
         return [("bullets", stripped)]
-    if all(re.match(r"^\d+\.\s", l) or not l.strip() for l in lines):
+    if all(re.match(r"^\d+\.\s", ln) or not ln.strip() for ln in lines):
         return [("numbered", stripped)]
     return [("paragraph", stripped)]

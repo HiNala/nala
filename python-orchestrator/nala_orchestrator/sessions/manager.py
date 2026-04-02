@@ -21,9 +21,9 @@ import json
 import os
 import tempfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -48,8 +48,8 @@ class SessionManager:
         self.project_root = project_root
         self.sessions_dir = project_root / ".nala" / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
-        self._current: Optional[Path] = None
-        self._meta: Optional[SessionMeta] = None
+        self._current: Path | None = None
+        self._meta: SessionMeta | None = None
 
     # ── Create / open ──────────────────────────────────────────────────────
 
@@ -74,7 +74,7 @@ class SessionManager:
         self._save_meta()
         return meta
 
-    def load_session(self, session_id: str) -> Optional[SessionMeta]:
+    def load_session(self, session_id: str) -> SessionMeta | None:
         """Load an existing session by ID."""
         session_dir = self.sessions_dir / session_id
         meta_path = session_dir / "session.json"
@@ -137,7 +137,7 @@ class SessionManager:
         turn = {
             "role": role,
             "content": content,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         jsonl_path = self._current / "conversation.jsonl"
         line = json.dumps(turn, ensure_ascii=False) + "\n"
@@ -152,7 +152,7 @@ class SessionManager:
             # On Windows rename doesn't atomically replace but we still avoid
             # partial writes — read+write pattern is safe enough for dev tool.
             with open(jsonl_path, "a", encoding="utf-8") as dest:
-                with open(tmp_path, "r", encoding="utf-8") as src:
+                with open(tmp_path, encoding="utf-8") as src:
                     dest.write(src.read())
         finally:
             try:
@@ -245,11 +245,11 @@ class SessionManager:
     # ── Properties ────────────────────────────────────────────────────────
 
     @property
-    def current_dir(self) -> Optional[Path]:
+    def current_dir(self) -> Path | None:
         return self._current
 
     @property
-    def current_meta(self) -> Optional[SessionMeta]:
+    def current_meta(self) -> SessionMeta | None:
         return self._meta
 
     # ── Private ────────────────────────────────────────────────────────────

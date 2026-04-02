@@ -5,9 +5,9 @@ ends.  Before compaction or close, Nala writes a structured handoff document.
 When the next session starts, it reads the document and resumes seamlessly.
 """
 
-from .schema import HandoffDocument, InProgressState, ModifiedFile, Decision
-from .writer import HandoffWriter
 from .reader import HandoffReader
+from .schema import Decision, HandoffDocument, InProgressState, ModifiedFile
+from .writer import HandoffWriter
 
 __all__ = [
     "HandoffDocument", "InProgressState", "ModifiedFile", "Decision",

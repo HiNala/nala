@@ -22,14 +22,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
-from .dedup import Deduplicator
-from .tool_outputs import compress_tool_outputs, is_verbose_output
 from .code_context import CodeContextCompressor
-from .structural import StructuralCompressor
+from .dedup import Deduplicator
 from .facts import FactExtractor
 from .quality import QualityChecker, QualityReport
+from .structural import StructuralCompressor
+from .tool_outputs import compress_tool_outputs, is_verbose_output
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ class PipelineReport:
     tool_blocks_compressed: int
     code_blocks_compressed: int
     structural_blocks: int
-    quality: Optional[QualityReport] = None
+    quality: QualityReport | None = None
     stages_applied: list[str] = field(default_factory=list)
 
     @property
@@ -142,7 +141,7 @@ class CompressionPipeline:
         orig_chars = sum(len(m.get("content", "")) for m in history)
         final_chars = sum(len(m.get("content", "")) for m in new_history)
 
-        quality: Optional[QualityReport] = None
+        quality: QualityReport | None = None
         if self._quality:
             orig_text = " ".join(m.get("content", "") for m in old)
             comp_text = " ".join(m.get("content", "") for m in compressed_old)
@@ -171,7 +170,7 @@ class CompressionPipeline:
         content, tc, cc, sc, stages = self._compress_content(text)
         orig_chars = len(text)
         final_chars = len(content)
-        quality: Optional[QualityReport] = None
+        quality: QualityReport | None = None
         if self._quality:
             quality = self._quality.check(text, content)
             if not quality.passed:

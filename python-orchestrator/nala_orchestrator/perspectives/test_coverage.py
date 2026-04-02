@@ -18,8 +18,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .base import BasePerspective, PerspectiveResult
 from ..sessions.report import Finding
+from .base import BasePerspective, PerspectiveResult
 
 if TYPE_CHECKING:
     pass

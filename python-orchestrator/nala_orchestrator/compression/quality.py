@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-
 MIN_RETENTION_PCT = 30.0    # compressed must retain >= this % of original chars
 MAX_COMPRESSION_PCT = 85.0  # refuse if compression removed > this % of content
 

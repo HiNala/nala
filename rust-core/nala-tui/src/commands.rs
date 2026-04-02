@@ -140,7 +140,9 @@ impl App {
             "  /context               — show context window usage breakdown\n",
             "  /compact               — compact context window to free tokens\n",
             "  /compact <focus>       — compact while preserving focus topic\n",
-            "  /diag                  — show LSP diagnostics summary (errors/warnings)\n",
+            "  /diag                  — show LSP diagnostics summary\n",
+            "  /diag errors           — show only errors\n",
+            "  /diag warnings         — show only warnings\n",
             "  /doctor                — environment and readiness diagnostics\n",
             "  /clear                 — clear message log\n",
             "  /help                  — show this help\n",
@@ -226,7 +228,7 @@ impl App {
             }
             Some(_) if !self.llm_available => {
                 self.push_message(Message::system(
-                    "No LLM configured. Add ANTHROPIC_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY) to .env and restart.",
+                    "No LLM API key found. Add one of these to your .env file and restart:\n  ANTHROPIC_API_KEY=sk-...\n  OPENAI_API_KEY=sk-...\n  GOOGLE_API_KEY=...",
                 ));
             }
             Some(bridge) => {
@@ -454,7 +456,7 @@ impl App {
         self.push_message(Message::assistant(text));
     }
 
-    fn show_diagnostics(&mut self, _filter: &str) {
+    fn show_diagnostics(&mut self, filter: &str) {
         let errors = self.diagnostics_store.error_count();
         let warnings = self.diagnostics_store.warning_count();
 
@@ -469,11 +471,18 @@ impl App {
             return;
         }
 
+        let filter = filter.trim();
+        let severity_filter: Option<&str> = match filter {
+            "errors" | "error" | "e" => Some("E"),
+            "warnings" | "warning" | "w" => Some("W"),
+            _ => None,
+        };
+
         let mut lines = vec![format!("LSP Diagnostics: {} errors, {} warnings", errors, warnings)];
         lines.push(String::new());
 
         let store = &self.diagnostics_store;
-        if let Ok(map) = store.inner_snapshot() {
+        if let Some(map) = store.inner_snapshot() {
             let mut files: Vec<_> = map.keys().collect();
             files.sort();
             for file in files.into_iter().take(20) {
@@ -489,6 +498,11 @@ impl App {
                         nala_lsp::DiagSeverity::Info => "I",
                         nala_lsp::DiagSeverity::Hint => "H",
                     };
+                    if let Some(sf) = severity_filter {
+                        if sev != sf {
+                            continue;
+                        }
+                    }
                     lines.push(format!(
                         "  [{}] {}:{}:{} — {}",
                         sev,

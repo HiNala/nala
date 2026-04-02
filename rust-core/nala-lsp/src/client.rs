@@ -280,8 +280,9 @@ impl LspManager {
                 c["value"].as_str().unwrap_or("").to_string()
             }
             Some(c) if c.is_array() => {
+                let empty = Vec::new();
                 c.as_array()
-                    .unwrap_or(&vec![])
+                    .unwrap_or(&empty)
                     .iter()
                     .filter_map(|v| {
                         if v.is_string() {

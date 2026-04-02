@@ -11,7 +11,6 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Optional
 
 
 @dataclass
@@ -49,7 +48,7 @@ class MessageBus:
         with self._mutex:
             self._broadcast_log.append(msg)
 
-    def get_messages(self, agent_id: str, since: Optional[float] = None) -> list[AgentMessage]:
+    def get_messages(self, agent_id: str, since: float | None = None) -> list[AgentMessage]:
         """Get unread messages for an agent (targeted + broadcasts)."""
         with self._mutex:
             # Targeted messages

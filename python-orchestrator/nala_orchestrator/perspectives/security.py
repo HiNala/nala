@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .base import BasePerspective, PerspectiveResult
 from ..sessions.report import Finding
+from .base import BasePerspective, PerspectiveResult
 
 if TYPE_CHECKING:
     pass
@@ -51,7 +51,10 @@ PATTERNS: list[Pattern] = [
             "external source (user, file, network) this is a remote code execution vulnerability."
         ),
         severity="critical",
-        suggestion="Parse structured data with json.loads(), ast.literal_eval(), or a proper parser instead.",
+        suggestion=(
+            "Parse structured data with json.loads(), ast.literal_eval(), "
+            "or a proper parser instead."
+        ),
         languages=_PY,
     ),
     Pattern(
@@ -61,7 +64,10 @@ PATTERNS: list[Pattern] = [
             "`exec()` executes arbitrary Python code. Same risk as eval()."
         ),
         severity="critical",
-        suggestion="Replace with a structured approach: importlib for dynamic imports, subprocess for shell commands.",
+        suggestion=(
+            "Replace with a structured approach: importlib for dynamic imports, "
+            "subprocess for shell commands."
+        ),
         languages=_PY,
     ),
     Pattern(
@@ -173,7 +179,10 @@ PATTERNS: list[Pattern] = [
             "source this is a code injection vulnerability."
         ),
         severity="critical",
-        suggestion="JSON.parse() for JSON data; no legitimate use case for eval() in application code.",
+        suggestion=(
+            "JSON.parse() for JSON data; no legitimate use case for eval() "
+            "in application code."
+        ),
         languages=_JS,
     ),
     Pattern(
@@ -218,7 +227,10 @@ PATTERNS: list[Pattern] = [
             "In a production binary this is poor error handling."
         ),
         severity="low",
-        suggestion="Use .expect(\"context\") for developer clarity, or ? / match for proper error propagation.",
+        suggestion=(
+            'Use .expect("context") for developer clarity, or ? / match for '
+            "proper error propagation."
+        ),
         languages=_RS,
     ),
 ]

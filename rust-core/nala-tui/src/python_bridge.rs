@@ -295,7 +295,7 @@ pub async fn spawn(
     project_root: &std::path::Path,
     bg_tx: mpsc::Sender<BackgroundEvent>,
 ) -> Result<PythonBridge> {
-    let (query_tx, query_rx) = mpsc::channel::<BridgeRequest>(32);
+    let (query_tx, query_rx) = mpsc::channel::<BridgeRequest>(128);
 
     let root = project_root.to_path_buf();
     let root_str = root.to_string_lossy().to_string();
@@ -625,7 +625,10 @@ async fn send_line(stdin: &mut ChildStdin, msg: &Value) -> Result<()> {
 async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
     let msg = match serde_json::from_str::<Value>(raw) {
         Ok(v) => v,
-        Err(_) => return, // ignore malformed lines
+        Err(e) => {
+            eprintln!("[bridge] malformed JSON from Python: {e} — line: {}", &raw[..raw.len().min(200)]);
+            return;
+        }
     };
 
     let msg_type = msg.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -728,18 +731,3 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
     }
 }
 
-/// Send an index context update to the Python subprocess (fire-and-forget).
-pub async fn send_index_context(
-    stdin: &mut ChildStdin,
-    total_files: usize,
-    total_symbols: usize,
-) -> Result<()> {
-    let id = next_id();
-    let msg = json!({
-        "id": id,
-        "type": "index_context",
-        "total_files": total_files,
-        "total_symbols": total_symbols,
-    });
-    send_line(stdin, &msg).await
-}

@@ -14,25 +14,27 @@ a question in the TUI, it comes here. The orchestrator:
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncIterator, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from nala_orchestrator.chunking.embedder import Embedder
     from nala_orchestrator.config import Config
     from nala_orchestrator.sessions.manager import SessionManager
-    from nala_orchestrator.chunking.embedder import Embedder
 
-from ..llm.provider import LLMMessage, create_provider
-from ..context.counter import TokenCounter, TokenUsage
-from ..context.config import CompactionConfig
-from ..context.detector import OpportunityDetector
-from ..context.compactor import Compactor
 from ..context.background_summary import BackgroundSummary
+from ..context.compactor import Compactor
+from ..context.config import CompactionConfig
+from ..context.counter import TokenCounter, TokenUsage
+from ..context.detector import OpportunityDetector
+from ..llm.provider import LLMMessage, create_provider
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT_TEMPLATE = """You are Nala, a terminal-first AI coding assistant with deep understanding
+SYSTEM_PROMPT_TEMPLATE = """\
+You are Nala, a terminal-first AI coding assistant with deep understanding
 of the project you are analysing.
 
 Project: {project_name}
@@ -129,14 +131,14 @@ class ConversationContext:
 class AgentOrchestrator:
     """Routes user queries to the LLM with codebase context."""
 
-    def __init__(self, config: "Config") -> None:
+    def __init__(self, config: Config) -> None:
         self.config = config
         self.context = ConversationContext(
             project_root=str(config.project_root),
         )
         self._provider = None
-        self._session: Optional["SessionManager"] = None
-        self._embedder: Optional["Embedder"] = None
+        self._session: SessionManager | None = None
+        self._embedder: Embedder | None = None
         self._token_counter = TokenCounter(model=getattr(config, "llm_model", "default"))
         self._compaction_cfg = CompactionConfig()
         self._detector = OpportunityDetector()
@@ -145,7 +147,7 @@ class AgentOrchestrator:
 
     # ── Retrieval ──────────────────────────────────────────────────────────
 
-    def set_embedder(self, embedder: "Embedder") -> None:
+    def set_embedder(self, embedder: Embedder) -> None:
         """Attach an Embedder so queries are augmented with retrieved context."""
         self._embedder = embedder
 
@@ -160,11 +162,11 @@ class AgentOrchestrator:
 
     # ── Session management ─────────────────────────────────────────────────
 
-    def set_session(self, session_manager: "SessionManager") -> None:
+    def set_session(self, session_manager: SessionManager) -> None:
         """Attach a SessionManager so turns are logged to disk."""
         self._session = session_manager
 
-    def ensure_session(self) -> "SessionManager":
+    def ensure_session(self) -> SessionManager:
         """Return the current session, creating a new one if needed."""
         if self._session is None:
             from nala_orchestrator.sessions.manager import SessionManager
@@ -173,7 +175,7 @@ class AgentOrchestrator:
             self._session = sm
         return self._session
 
-    def restore_history(self, session_manager: "SessionManager") -> None:
+    def restore_history(self, session_manager: SessionManager) -> None:
         """
         Reload conversation history from a saved session into in-memory context.
         Called when resuming a past session.

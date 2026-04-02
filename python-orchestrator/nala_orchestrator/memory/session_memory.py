@@ -19,7 +19,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +55,11 @@ class SessionRecord:
         if self.modified_files:
             lines += ["### Modified Files"] + [f"- {f}" for f in self.modified_files] + [""]
         if self.developer_prefs:
-            lines += ["### Developer Preferences Observed"] + [f"- {p}" for p in self.developer_prefs] + [""]
+            lines += (
+                ["### Developer Preferences Observed"]
+                + [f"- {p}" for p in self.developer_prefs]
+                + [""]
+            )
         return "\n".join(lines)
 
     def to_context_injection(self) -> str:
@@ -97,7 +100,7 @@ class SessionMemory:
         self,
         session_id: str,
         history: list[dict],
-        modified_files: Optional[list[str]] = None,
+        modified_files: list[str] | None = None,
     ) -> SessionRecord:
         """Extract facts from conversation history and persist."""
         record = self._extract(session_id, history)
@@ -156,7 +159,10 @@ class SessionMemory:
         result = []
         for f in files:
             lines = f.read_text(encoding="utf-8").splitlines()
-            summary = next((l.lstrip("# ").strip() for l in lines if l.strip()), f.stem)
+            summary = next(
+                (ln.lstrip("# ").strip() for ln in lines if ln.strip()),
+                f.stem,
+            )
             result.append({"session_id": f.stem, "summary": summary[:80]})
         return result
 

@@ -19,8 +19,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .base import BasePerspective, PerspectiveResult
 from ..sessions.report import Finding
+from .base import BasePerspective, PerspectiveResult
 
 if TYPE_CHECKING:
     pass
@@ -87,7 +87,10 @@ class DependencyPerspective(BasePerspective):
                 start_line=0,
                 severity="high",
                 perspective=self.name,
-                suggestion="Break the cycle by extracting shared code into a common module that neither side imports.",
+                suggestion=(
+                    "Break the cycle by extracting shared code into a common module "
+                    "that neither side imports."
+                ),
             ))
 
         # High coupling
@@ -151,7 +154,8 @@ class DependencyPerspective(BasePerspective):
                     title=f"High fan-out: {file_rel} imports {len(mods)} modules",
                     description=(
                         f"`{file_rel}` imports {len(mods)} modules. "
-                        "High fan-out increases the blast radius of changes to any of those modules."
+                        "High fan-out increases the blast radius of changes to any "
+                        "of those modules."
                     ),
                     file_path=file_rel,
                     start_line=1,
@@ -193,7 +197,11 @@ class DependencyPerspective(BasePerspective):
 
 _PY_IMPORT  = re.compile(r'^(?:from\s+([\w.]+)\s+import|import\s+([\w., ]+))', re.MULTILINE)
 _RS_USE     = re.compile(r'^\s*use\s+([\w:]+)', re.MULTILINE)
-_JS_IMPORT  = re.compile(r'''(?:import\s+.*?\s+from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\))''', re.MULTILINE)
+_JS_IMPORT = re.compile(
+    r'''(?:import\s+.*?\s+from\s+['"]([^'"]+)['"]|'''
+    r'''require\s*\(\s*['"]([^'"]+)['"]\s*\))''',
+    re.MULTILINE,
+)
 
 
 def _extract_imports(src: str, lang: str) -> list[str]:

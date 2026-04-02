@@ -14,7 +14,6 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -76,8 +75,8 @@ class SharedTaskList:
         self,
         objective: str,
         assigned_to: str = "",
-        scope: Optional[list[str]] = None,
-        dependencies: Optional[list[str]] = None,
+        scope: list[str] | None = None,
+        dependencies: list[str] | None = None,
     ) -> Task:
         """Add a new task and determine its initial status."""
         import json
@@ -114,7 +113,8 @@ class SharedTaskList:
     def complete_task(self, agent_id: str, task_id: str, result: str = "") -> None:
         """Mark a task completed and unblock any dependent tasks."""
         self._conn.execute(
-            "UPDATE tasks SET status=?, result_summary=?, completed_at=? WHERE id=? AND assigned_to=?",
+            "UPDATE tasks SET status=?, result_summary=?, completed_at=? "
+            "WHERE id=? AND assigned_to=?",
             (TaskStatus.COMPLETED.value, result, time.time(), task_id, agent_id),
         )
         self._conn.commit()
@@ -157,7 +157,7 @@ class SharedTaskList:
         rows = self._conn.execute("SELECT * FROM tasks ORDER BY created_at").fetchall()
         return [self._row_to_task(r) for r in rows]
 
-    def get_task(self, task_id: str) -> Optional[Task]:
+    def get_task(self, task_id: str) -> Task | None:
         row = self._conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         return self._row_to_task(row) if row else None
 
