@@ -137,15 +137,19 @@ class ModelRegistry:
                 else:
                     lines.append("  _(no models in catalog)_")
             elif not status.key_present:
-                lines.append(f"  No API key configured. Set `{_env_var_for(provider)}` in `.env`.")
+                lines.append(f"  No API key configured. Use `/settings set keys.{_settings_key_for(provider)} <key>` or set `{_env_var_for(provider)}` in `.env`.")
             else:
-                lines.append(f"  Key present but invalid: {status.error or 'unknown error'}")
+                lines.append(f"  Key present but invalid: {status.error or 'unknown error'}. Check the key value with `/settings`.")
 
             lines.append("")
 
         active = self.active_provider_count
         total = len(Provider)
-        lines.append(f"**{active}/{total}** providers active. Use `/model` to see current routing.")
+        lines.append(f"**{active}/{total}** providers active.")
+        if active == 0:
+            lines.append("Run `/settings setup` to configure API keys.")
+        else:
+            lines.append("Use `/model` to see current routing, `/settings` to change preferences.")
         return "\n".join(lines)
 
     # ── Provider probing ────────────────────────────────────────────────
@@ -307,4 +311,13 @@ def _env_var_for(provider: Provider) -> str:
         Provider.OPENAI: "OPENAI_API_KEY",
         Provider.GOOGLE: "GOOGLE_API_KEY",
         Provider.OLLAMA: "OLLAMA_BASE_URL",
+    }.get(provider, "???")
+
+
+def _settings_key_for(provider: Provider) -> str:
+    return {
+        Provider.ANTHROPIC: "anthropic_api_key",
+        Provider.OPENAI: "openai_api_key",
+        Provider.GOOGLE: "google_api_key",
+        Provider.OLLAMA: "ollama_base_url",
     }.get(provider, "???")
