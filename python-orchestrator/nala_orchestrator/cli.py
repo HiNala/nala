@@ -200,8 +200,23 @@ _INTENT_SYSTEM_PROMPT = (
 )
 
 
+def _looks_informational(text: str) -> bool:
+    """Fast guardrail: obvious Q&A should bypass agent suggestion."""
+    t = text.strip().lower()
+    if not t:
+        return True
+    prefixes = (
+        "what ", "where ", "when ", "who ", "why ", "how ",
+        "is ", "are ", "does ", "do ", "which ",
+        "explain ", "describe ", "summarize ", "list ",
+    )
+    return any(t.startswith(p) for p in prefixes)
+
+
 async def _is_actionable_query_semantic(agent: AgentOrchestrator, text: str) -> tuple[bool, str]:
     """AI semantic classifier for spawn suggestion; falls back to heuristics."""
+    if _looks_informational(text):
+        return False, "informational guard"
     try:
         provider = agent._get_provider()
         response = await asyncio.wait_for(
@@ -210,7 +225,7 @@ async def _is_actionable_query_semantic(agent: AgentOrchestrator, text: str) -> 
                 system_prompt=_INTENT_SYSTEM_PROMPT,
                 max_tokens=120,
             ),
-            timeout=4.0,
+            timeout=1.2,
         )
         raw = (response.content or "").strip()
         if not raw:
@@ -224,10 +239,10 @@ async def _is_actionable_query_semantic(agent: AgentOrchestrator, text: str) -> 
         confidence = float(data.get("confidence", 0.0))
         reason = str(data.get("reason", "")).strip() or "semantic classifier"
 
-        # Conservative threshold to avoid noisy prompts.
-        if confidence >= 0.62:
+        # Strict threshold so suggestions never block normal Q&A flow.
+        if confidence >= 0.82:
             return should_spawn, f"{reason} (confidence={confidence:.2f})"
-        return _is_actionable_query_fallback(text), f"low confidence={confidence:.2f}"
+        return False, f"low confidence={confidence:.2f}"
     except Exception as exc:
         return _is_actionable_query_fallback(text), f"fallback due to {type(exc).__name__}"
 
@@ -637,9 +652,10 @@ async def handle_request(
             return
 
         skip_suggest = req.get("skip_suggest", False)
+        suggest_enabled = os.environ.get("NALA_AGENT_SUGGEST", "1").strip().lower() not in {"0", "false", "no", "off"}
         should_suggest = False
         suggest_reason = ""
-        if not skip_suggest and _agent_manager is not None and config.has_llm():
+        if suggest_enabled and not skip_suggest and _agent_manager is not None and config.has_llm():
             should_suggest, suggest_reason = await _is_actionable_query_semantic(agent, text)
 
         if should_suggest:
