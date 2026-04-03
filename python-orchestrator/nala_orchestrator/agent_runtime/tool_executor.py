@@ -46,8 +46,13 @@ def _dispatch_tool(toolbox: Toolbox, name: str, args: dict) -> str:
                 )
             case "search_code":
                 return toolbox.search_code(args.get("query", ""))
+            case "get_cwd":
+                return toolbox.get_cwd()
             case "run_shell":
-                result = toolbox.run_shell(args.get("command", ""))
+                result = toolbox.run_shell(
+                    args.get("command", ""),
+                    cwd=args.get("cwd", ""),
+                )
                 return f"exit_code={result['exit_code']}\n{result['output']}"
             case "git_status":
                 return toolbox.git_status()

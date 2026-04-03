@@ -50,6 +50,20 @@ class Toolbox:
     def set_task_ledger(self, ledger: TaskLedger) -> None:
         self._task_ledger = ledger
 
+    # ── Path helpers ───────────────────────────────────────────────────
+
+    def _resolve_path(self, path: str) -> Path:
+        import os
+        if os.path.isabs(path):
+            return Path(path)
+        return self.project_root / path
+
+    def _is_within_project(self, path: Path) -> bool:
+        try:
+            return str(path.resolve()).startswith(str(self.project_root.resolve()))
+        except Exception:
+            return False
+
     # ── Git ────────────────────────────────────────────────────────────
 
     def git_diff(self) -> str:
@@ -113,14 +127,15 @@ class Toolbox:
 
     # ── File tools ─────────────────────────────────────────────────────
 
+    def get_cwd(self) -> str:
+        """Return project root path used as default working directory."""
+        return str(self.project_root.resolve())
+
     def read_file(self, path: str, max_lines: int = 2000) -> str:
-        """Read a file from the project. Returns content or error."""
-        import os
-        target = Path(path) if os.path.isabs(path) else self.project_root / path
+        """Read a file by relative or absolute path."""
+        target = self._resolve_path(path)
         if not target.exists():
             return f"(file not found: {path})"
-        if not str(target.resolve()).startswith(str(self.project_root.resolve())):
-            return "(access denied: path is outside project root)"
         try:
             lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
             if len(lines) > max_lines:
@@ -146,12 +161,12 @@ class Toolbox:
         return "\n\n".join(parts)
 
     def list_files(self, directory: str = "", max_entries: int = 500) -> str:
-        """List files in a project directory."""
+        """List files in a directory (relative or absolute)."""
         import os
-        target = self.project_root / directory if directory else self.project_root
+        target = Path(directory) if directory and os.path.isabs(directory) else (self.project_root / directory if directory else self.project_root)
         if not target.exists():
             return f"(directory not found: {directory})"
-        entries = []
+        entries = [f"(listing: {target.resolve()})"]
         try:
             for item in sorted(target.iterdir()):
                 if item.name.startswith(".") or item.name in ("node_modules", "__pycache__", "target", ".git"):
@@ -170,11 +185,10 @@ class Toolbox:
         return "\n".join(entries) if entries else "(empty directory)"
 
     def write_file(self, path: str, content: str) -> str:
-        """Write content to a file. Creates parent directories if needed."""
-        import os
-        target = Path(path) if os.path.isabs(path) else self.project_root / path
-        if not str(target.resolve()).startswith(str(self.project_root.resolve())):
-            return "(access denied: path is outside project root)"
+        """Write content to a file inside the project root."""
+        target = self._resolve_path(path)
+        if not self._is_within_project(target):
+            return "(write denied: path is outside project root)"
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
@@ -183,13 +197,12 @@ class Toolbox:
             return f"(error writing file: {e})"
 
     def edit_file(self, path: str, old_text: str, new_text: str) -> str:
-        """Replace exact text in a file. old_text must match verbatim."""
-        import os
-        target = Path(path) if os.path.isabs(path) else self.project_root / path
+        """Replace exact text in a file inside the project root."""
+        target = self._resolve_path(path)
         if not target.exists():
             return f"(file not found: {path})"
-        if not str(target.resolve()).startswith(str(self.project_root.resolve())):
-            return "(access denied: path is outside project root)"
+        if not self._is_within_project(target):
+            return "(edit denied: path is outside project root)"
         try:
             content = target.read_text(encoding="utf-8", errors="replace")
             if old_text not in content:
@@ -202,14 +215,15 @@ class Toolbox:
             return f"(error editing file: {e})"
 
     def tree(self, directory: str = "", max_depth: int = 4, max_entries: int = 500) -> str:
-        """Recursive directory listing with depth control."""
-        target = self.project_root / directory if directory else self.project_root
+        """Recursive directory listing with depth control (relative or absolute)."""
+        import os
+        target = Path(directory) if directory and os.path.isabs(directory) else (self.project_root / directory if directory else self.project_root)
         if not target.exists():
             return f"(directory not found: {directory})"
         skip = {"node_modules", "__pycache__", "target", ".git", ".venv",
                 "venv", "dist", "build", ".nala", ".mypy_cache", ".next",
                 ".ruff_cache", ".pytest_cache", "egg-info"}
-        lines: list[str] = []
+        lines: list[str] = [f"({target.resolve()})"]
 
         def _walk(p: Path, prefix: str, depth: int) -> None:
             if len(lines) >= max_entries or depth > max_depth:
@@ -249,21 +263,22 @@ class Toolbox:
 
     # ── Shell / verification ────────────────────────────────────────
 
-    def run_shell(self, command: str, timeout: int = 60) -> dict:
+    def run_shell(self, command: str, timeout: int = 60, cwd: str = "") -> dict:
         """Run a shell command and return {exit_code, output}."""
         import subprocess
+        workdir = self._resolve_path(cwd) if cwd else self.project_root
         try:
             result = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
                 text=True,
-                cwd=str(self.project_root),
+                cwd=str(workdir),
                 timeout=timeout,
             )
             return {
                 "exit_code": result.returncode,
-                "output": (result.stdout + result.stderr).strip(),
+                "output": f"(cwd={workdir})\n" + (result.stdout + result.stderr).strip(),
             }
         except subprocess.TimeoutExpired:
             return {"exit_code": -1, "output": f"Command timed out after {timeout}s"}

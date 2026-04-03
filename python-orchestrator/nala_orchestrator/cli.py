@@ -96,6 +96,7 @@ from .handoff.reader import HandoffReader
 from .handoff.writer import HandoffWriter
 from .memory.knowledge import KnowledgeBase
 from .memory.session_memory import SessionMemory
+from .llm.provider import LLMMessage
 from .multi_agent.lead import LeadAgent
 from .perspectives.engine import PerspectivesEngine, format_results_as_text
 from .sessions.manager import SessionManager
@@ -142,34 +143,90 @@ _ACTION_VERBS = frozenset({
     "setup", "configure", "install", "upgrade", "replace", "rewrite",
     "extract", "merge", "split", "clean", "reorganize", "restructure",
     "patch", "repair", "improve", "simplify", "wrap", "unwrap",
+    "navigate", "open", "go", "cd", "run", "execute", "deploy",
+    "scan", "index", "analyze", "test", "lint", "format",
 })
-_QUESTION_STARTS = frozenset({
-    "what", "where", "when", "who", "why", "how", "is", "are", "do",
-    "does", "can", "could", "would", "should", "which", "tell", "show",
-    "explain", "describe", "summarize", "list",
+_PURE_QUESTION_STARTS = frozenset({
+    "what", "where", "when", "who", "why", "how", "is", "are",
+    "which", "explain", "describe", "summarize",
 })
 
 
-def _is_actionable_query(text: str) -> bool:
-    """Heuristic: does this query look like a task the agent should handle?"""
+def _is_actionable_query_fallback(text: str) -> bool:
+    """Fallback heuristic when semantic intent detection is unavailable."""
     words = text.lower().split()
     if not words:
         return False
-    first = words[0].rstrip(".,!?:;")
-    if first in _QUESTION_STARTS:
+    clean = [w.rstrip(".,!?:;") for w in words]
+    first = clean[0]
+
+    if first in _PURE_QUESTION_STARTS:
         return False
+
     if first in _ACTION_VERBS:
         return True
-    if any(w in _ACTION_VERBS for w in words[:4]):
+
+    # "can you fix ...", "could you move ...", "would you create ..."
+    if first in ("can", "could", "would", "will") and len(clean) >= 3:
+        verb = clean[2] if clean[1] == "you" else clean[1]
+        if verb in _ACTION_VERBS:
+            return True
+
+    # "please fix ...", "go ahead and fix ..."
+    if any(w in _ACTION_VERBS for w in clean[:5]):
         return True
+
     imperative_phrases = [
         "please fix", "please add", "please create", "please update",
+        "please move", "please navigate", "please go to", "please open",
         "go ahead", "make it", "make the", "make sure",
-        "i need you to", "i want you to", "can you fix",
-        "can you create", "can you add", "can you write",
+        "i need you to", "i want you to",
+        "move forward", "move into", "move to", "go into", "go to",
+        "change directory", "switch to", "navigate to", "open the",
+        "read the file", "write the file", "edit the file",
+        "run the", "execute the", "start the",
     ]
     lower = text.lower()
     return any(p in lower for p in imperative_phrases)
+
+
+_INTENT_SYSTEM_PROMPT = (
+    "You are an intent classifier for a coding IDE assistant.\n"
+    "Classify whether the user's message is asking for active execution work\n"
+    "(editing files, navigating directories, running commands, doing research,\n"
+    "or autonomous agent workflow) versus a normal Q&A explanation.\n"
+    "Return STRICT JSON only with keys:\n"
+    '{"should_spawn": true|false, "confidence": 0.0-1.0, "reason": "short reason"}'
+)
+
+
+async def _is_actionable_query_semantic(agent: AgentOrchestrator, text: str) -> tuple[bool, str]:
+    """AI semantic classifier for spawn suggestion; falls back to heuristics."""
+    try:
+        provider = agent._get_provider()
+        response = await provider.chat(
+            messages=[LLMMessage(role="user", content=f"User message:\n{text}")],
+            system_prompt=_INTENT_SYSTEM_PROMPT,
+            max_tokens=120,
+        )
+        raw = (response.content or "").strip()
+        if not raw:
+            return _is_actionable_query_fallback(text), "empty classifier response"
+
+        # Recover JSON if wrapped in markdown fences.
+        if "```" in raw:
+            raw = raw.replace("```json", "").replace("```", "").strip()
+        data = json.loads(raw)
+        should_spawn = bool(data.get("should_spawn", False))
+        confidence = float(data.get("confidence", 0.0))
+        reason = str(data.get("reason", "")).strip() or "semantic classifier"
+
+        # Conservative threshold to avoid noisy prompts.
+        if confidence >= 0.62:
+            return should_spawn, f"{reason} (confidence={confidence:.2f})"
+        return _is_actionable_query_fallback(text), f"low confidence={confidence:.2f}"
+    except Exception as exc:
+        return _is_actionable_query_fallback(text), f"fallback due to {type(exc).__name__}"
 
 
 def write_response(data: dict) -> None:
@@ -577,12 +634,13 @@ async def handle_request(
             return
 
         skip_suggest = req.get("skip_suggest", False)
-        if (
-            not skip_suggest
-            and _agent_manager is not None
-            and config.has_llm()
-            and _is_actionable_query(text)
-        ):
+        should_suggest = False
+        suggest_reason = ""
+        if not skip_suggest and _agent_manager is not None and config.has_llm():
+            should_suggest, suggest_reason = await _is_actionable_query_semantic(agent, text)
+
+        if should_suggest:
+            log.info("agent suggest=yes reason=%s text=%r", suggest_reason, text[:80])
             write_response({
                 "id": req_id,
                 "type": "suggest_agent",

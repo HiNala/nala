@@ -17,7 +17,7 @@ AGENT_TOOLS: list[dict] = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative path from project root (e.g. 'src/main.py')",
+                        "description": "Relative or absolute path (e.g. 'src/main.py' or 'C:/.../file.py')",
                     },
                 },
                 "required": ["path"],
@@ -80,7 +80,7 @@ AGENT_TOOLS: list[dict] = [
                 "properties": {
                     "directory": {
                         "type": "string",
-                        "description": "Relative directory path (empty string for project root)",
+                        "description": "Relative or absolute directory path (empty string for project root)",
                         "default": "",
                     },
                 },
@@ -98,7 +98,7 @@ AGENT_TOOLS: list[dict] = [
                 "properties": {
                     "directory": {
                         "type": "string",
-                        "description": "Relative directory path (empty for root)",
+                        "description": "Relative or absolute directory path (empty for root)",
                         "default": "",
                     },
                     "max_depth": {
@@ -131,14 +131,27 @@ AGENT_TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "get_cwd",
+            "description": "Get the current working project root path.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_shell",
-            "description": "Run a shell command in the project root directory. Use for tests, lints, builds.",
+            "description": "Run a shell command. Use for tests, lints, builds, and filesystem navigation checks.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
                         "description": "Shell command to execute",
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional relative or absolute working directory",
+                        "default": "",
                     },
                 },
                 "required": ["command"],
