@@ -204,10 +204,13 @@ async def _is_actionable_query_semantic(agent: AgentOrchestrator, text: str) -> 
     """AI semantic classifier for spawn suggestion; falls back to heuristics."""
     try:
         provider = agent._get_provider()
-        response = await provider.chat(
-            messages=[LLMMessage(role="user", content=f"User message:\n{text}")],
-            system_prompt=_INTENT_SYSTEM_PROMPT,
-            max_tokens=120,
+        response = await asyncio.wait_for(
+            provider.chat(
+                messages=[LLMMessage(role="user", content=f"User message:\n{text}")],
+                system_prompt=_INTENT_SYSTEM_PROMPT,
+                max_tokens=120,
+            ),
+            timeout=4.0,
         )
         raw = (response.content or "").strip()
         if not raw:

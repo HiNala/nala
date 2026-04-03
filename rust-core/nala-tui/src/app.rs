@@ -430,29 +430,31 @@ impl App {
 
     pub async fn run(&mut self) -> Result<()> {
         let mut terminal = ratatui::init();
-        let mouse_capture_disabled = std::env::var("NALA_NO_MOUSE")
+        // Default is copy/select friendly: mouse capture OFF.
+        // Set NALA_MOUSE_CAPTURE=1 if you prefer in-app mouse wheel capture.
+        let mouse_capture_enabled = std::env::var("NALA_MOUSE_CAPTURE")
             .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
             .unwrap_or(false);
-        if mouse_capture_disabled {
-            crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
-        } else {
+        if mouse_capture_enabled {
             crossterm::execute!(
                 std::io::stdout(),
                 crossterm::event::EnableMouseCapture,
                 crossterm::event::EnableBracketedPaste
             )?;
+        } else {
+            crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
         }
         self.start_python_bridge().await;
         let result = self.event_loop(&mut terminal).await;
         self.cleanup_dashboard_process();
-        if mouse_capture_disabled {
-            crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste)?;
-        } else {
+        if mouse_capture_enabled {
             crossterm::execute!(
                 std::io::stdout(),
                 crossterm::event::DisableBracketedPaste,
                 crossterm::event::DisableMouseCapture
             )?;
+        } else {
+            crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste)?;
         }
         ratatui::restore();
         result
