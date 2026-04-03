@@ -5,7 +5,7 @@ context string for injection into an LLM prompt.
 
 Assembly algorithm:
   1. Deduplicate / merge overlapping chunks from the same file.
-  2. Sort by file path then start line (sequential reading aids comprehension).
+  2. Preserve retrieval ranking (highest relevance first).
   3. Format each chunk with a header comment showing location and type.
   4. Trim to the token budget, dropping lowest-ranked chunks first.
 """
@@ -16,11 +16,10 @@ from dataclasses import dataclass
 
 from .splitter import Chunk
 
-# Token budget for retrieved context. Models like GPT-4o (128k) and Claude (200k)
-# can handle generous context; 12k gives room for ~50 code chunks alongside
+# Token budget for retrieved context. GPT-4o (128k) and Claude (200k) can
+# handle generous context; 24k gives room for ~80+ code chunks alongside
 # conversation history, system prompt, and response.
-DEFAULT_TOKEN_BUDGET = 12_000
-# Approximate characters per token (code skews denser than prose).
+DEFAULT_TOKEN_BUDGET = 24_000
 CHARS_PER_TOKEN = 4
 
 
@@ -60,17 +59,16 @@ class ContextAssembler:
 
         total = len(chunks)
         merged = self._merge_overlapping(chunks)
-        sorted_chunks = sorted(merged, key=lambda c: (c.file_path, c.start_line))
 
         parts: list[str] = []
         tokens_used = 0
 
-        for chunk in sorted_chunks:
+        for chunk in merged:
             header = self._format_header(chunk)
             block = f"{header}\n{chunk.content}\n"
             block_tokens = len(block) // CHARS_PER_TOKEN
             if tokens_used + block_tokens > token_budget:
-                break
+                continue
             parts.append(block)
             tokens_used += block_tokens
 

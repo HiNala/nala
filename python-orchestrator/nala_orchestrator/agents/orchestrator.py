@@ -37,37 +37,42 @@ from .action_extractor import extract_actions
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT_TEMPLATE = """\
-You are Nala, a terminal-first AI coding assistant with deep understanding
-of the project you are analysing. You have indexed and can search the full
-codebase. When answering, cite specific files, functions, and line numbers.
+You are **Nala**, an expert AI coding assistant embedded inside a terminal-first
+IDE. You have **full indexed access** to the project's source code. Every answer
+you give should be grounded in the actual code shown below under "Retrieved
+context". Cite specific **file paths, function names, and line numbers** when
+referencing code.
 
-Project: {project_name}
-Location: {project_root}
-Files indexed: {total_files}
-Symbols found: {total_symbols}
-Primary language: {primary_language}
+## Project overview
+- **Name:** {project_name}
+- **Root:** {project_root}
+- **Files indexed:** {total_files}
+- **Symbols extracted:** {total_symbols}
+- **Primary language:** {primary_language}
 
-## Your capabilities
-- Search and read any file in the project via your indexed context
-- Suggest edits with exact file paths and line numbers
-- Explain code, architecture, and data flow across the codebase
-- Identify bugs, risks, complexity hotspots, and dead code
-- Generate refactoring plans with step-by-step actions
-- When the user uses /act, you can propose file edits, file creation, and shell commands
+{project_brief}
 
-## Agent tools (available during /agent runs)
-- **read_file(path)** — read any file in the project
-- **search_code(query)** — search indexed code for relevant functions/classes
-- **list_files(directory)** — list files in a directory
-- **run_shell(command)** — execute a shell command (tests, lints, builds)
-- **git_diff / git_status / git_branch** — inspect git state
-- **run_analysis(scope)** — run static analysis (complexity, security, dependencies)
+## What you can do right now
+- Answer questions about architecture, data flow, and dependencies using the
+  indexed code chunks provided below.
+- Explain what any function, class, or module does — cite exact locations.
+- Identify bugs, risks, complexity hotspots, dead code, and missing tests.
+- Suggest refactoring plans with specific file paths and line numbers.
+- When the user uses `/act`, propose concrete file edits with diff-style actions.
 
-## Response guidelines
-- Be concise and specific — cite file:line references
-- Use markdown formatting: **bold**, `inline code`, ```code blocks```
-- Structure longer answers with ## headings and bullet points
-- The developer is experienced — skip basics, focus on insight
+## How context works
+The "Retrieved context" section below contains the most relevant code chunks
+retrieved from the indexed codebase based on the user's current question. Use
+this as your primary source of truth. If the retrieved context does not contain
+enough information to answer confidently, say so and suggest which files or
+commands the user should look at.
+
+## Response style
+- **Be specific** — always cite `file_path:line_number` when referencing code.
+- **Be concise** — the developer is experienced; skip basic explanations.
+- Use markdown: **bold**, `inline code`, ```code blocks```, headings, bullets.
+- Structure longer answers with `##` headings.
+- When you don't know something, say so rather than guessing.
 
 ## Project structure
 {file_tree}
@@ -228,6 +233,28 @@ class AgentOrchestrator:
         _walk(root, "", 0)
         return "\n".join(lines) if lines else "(empty project)"
 
+    # ── Project brief ─────────────────────────────────────────────────────
+
+    def _load_project_brief(self) -> str:
+        """Load a short project description from README or .nala/agent/project-brief.md."""
+        root = Path(self.context.project_root)
+        brief_path = root / ".nala" / "agent" / "project-brief.md"
+        if brief_path.exists():
+            try:
+                text = brief_path.read_text(encoding="utf-8", errors="replace")[:3000]
+                return f"## Project brief\n{text.strip()}"
+            except Exception:
+                pass
+        for name in ("README.md", "readme.md", "README.rst", "README.txt", "README"):
+            readme = root / name
+            if readme.exists():
+                try:
+                    text = readme.read_text(encoding="utf-8", errors="replace")[:4000]
+                    return f"## From README\n{text.strip()}"
+                except Exception:
+                    pass
+        return ""
+
     # ── Retrieval ──────────────────────────────────────────────────────────
 
     def set_embedder(self, embedder: Embedder) -> None:
@@ -245,11 +272,17 @@ class AgentOrchestrator:
     def _retrieve_context(self, query: str) -> str:
         """Retrieve the most relevant code chunks for a query."""
         if self._embedder is None or not self._embedder.is_ready():
-            return "(index not yet available)"
+            return "(index not yet available — try again after 'Index complete' appears)"
         from ..chunking.assembler import ContextAssembler
-        chunks = self._embedder.retrieve(query, top_k=20)
-        assembled = ContextAssembler().assemble(chunks, token_budget=12_000)
-        return assembled.text
+        chunks = self._embedder.retrieve(query, top_k=30)
+        assembled = ContextAssembler().assemble(chunks, token_budget=24_000)
+        if assembled.included_chunks == 0:
+            return "(no relevant code found for this query)"
+        return (
+            f"__{assembled.included_chunks} chunks from {assembled.total_chunks} "
+            f"candidates (~{assembled.token_estimate} tokens)__\n\n"
+            + assembled.text
+        )
 
     # ── Session management ─────────────────────────────────────────────────
 
@@ -297,12 +330,14 @@ class AgentOrchestrator:
         """Build the system prompt with current project context and retrieved chunks."""
         retrieved = self._retrieve_context(query) if query else "(no query provided)"
         file_tree = self._build_file_tree()
+        project_brief = self._load_project_brief()
         base = SYSTEM_PROMPT_TEMPLATE.format(
             project_name=Path(self.context.project_root).name,
             project_root=self.context.project_root,
             total_files=self.context.total_files,
             total_symbols=self.context.total_symbols,
             primary_language=self.context.primary_language,
+            project_brief=project_brief,
             file_tree=file_tree,
             retrieved_context=retrieved,
         )
