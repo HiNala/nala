@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .provider import BaseLLMProvider, LLMMessage, LLMResponse
 
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("nala.openai")
 
 _TIMEOUT_SECONDS = 90
+_MAX_TOOL_ROUNDS = 25
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -72,6 +74,53 @@ class OpenAIProvider(BaseLLMProvider):
             output_tokens=usage.completion_tokens if usage else 0,
             finish_reason=response.choices[0].finish_reason or "stop",
         )
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict],
+        system_prompt: str | None = None,
+        max_tokens: int = 4096,
+    ) -> dict:
+        """Single-round chat that may return tool_calls.
+
+        Returns the raw assistant message dict from the API so the caller
+        can inspect ``tool_calls`` and feed results back.
+        """
+        all_messages: list[dict[str, Any]] = []
+        if system_prompt:
+            all_messages.append({"role": "system", "content": system_prompt})
+        all_messages.extend(messages)
+
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": all_messages,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        response = await self._client.chat.completions.create(**kwargs)
+        msg = response.choices[0].message
+
+        result: dict[str, Any] = {
+            "role": "assistant",
+            "content": msg.content or "",
+        }
+        if msg.tool_calls:
+            result["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in msg.tool_calls
+            ]
+        return result
 
     async def stream_chat(
         self,

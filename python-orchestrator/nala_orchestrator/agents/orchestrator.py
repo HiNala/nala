@@ -59,6 +59,9 @@ referencing code.
 - Identify bugs, risks, complexity hotspots, dead code, and missing tests.
 - Suggest refactoring plans with specific file paths and line numbers.
 - When the user uses `/act`, propose concrete file edits with diff-style actions.
+- When the user uses `/agent <objective>`, you can read/write/edit files,
+  run shell commands, search the codebase, and navigate directories using
+  function-calling tools.
 
 ## How context works
 The "Retrieved context" section below contains the most relevant code chunks

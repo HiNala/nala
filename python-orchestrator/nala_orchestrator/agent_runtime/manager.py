@@ -516,28 +516,89 @@ class AgentManager:
         return f"Agent run `{self._run.run_id}` is already active (phase: {self._run.phase.value})"
 
     async def handle_objective(self, objective: str) -> AsyncIterator[str]:
-        """Start a new run and stream the action query response."""
+        """Start a new run and execute using tool-calling when available."""
         self.start(objective)
         self._transition(AgentPhase.EXECUTING)
 
-        brief = self.load_project_brief()
-        guidance = self.load_scoped_guidance()
-        enriched = objective
-        if brief:
-            enriched = (
-                f"[PROJECT BRIEF]\n{brief[:2000]}\n[END BRIEF]\n\n"
-                + enriched
-            )
-        if guidance:
-            enriched = (
-                f"[SCOPED GUIDANCE]\n{guidance[:1000]}\n[END GUIDANCE]\n\n"
-                + enriched
-            )
+        # Try tool-calling loop first (OpenAI), fall back to streaming text
+        provider = self._get_tool_provider()
+        if provider is not None:
+            system_prompt = self._build_agent_system_prompt(objective)
+            from .tool_executor import run_tool_loop
+            async for chunk in run_tool_loop(
+                provider=provider,
+                toolbox=self.toolbox,
+                system_prompt=system_prompt,
+                user_message=objective,
+                max_tokens=4096,
+            ):
+                yield chunk
+        else:
+            brief = self.load_project_brief()
+            guidance = self.load_scoped_guidance()
+            enriched = objective
+            if brief:
+                enriched = (
+                    f"[PROJECT BRIEF]\n{brief[:2000]}\n[END BRIEF]\n\n"
+                    + enriched
+                )
+            if guidance:
+                enriched = (
+                    f"[SCOPED GUIDANCE]\n{guidance[:1000]}\n[END GUIDANCE]\n\n"
+                    + enriched
+                )
+            async for chunk in self.toolbox.stream_action_query(enriched):
+                yield chunk
 
-        async for chunk in self.toolbox.stream_action_query(enriched):
-            yield chunk
         if self._run:
             self._transition(AgentPhase.REVIEWING)
+
+    def _get_tool_provider(self):
+        """Return an OpenAI provider if available (supports function calling)."""
+        try:
+            from ..llm.openai_provider import OpenAIProvider
+            from ..llm.provider import create_provider
+            provider = create_provider(self.config)
+            if isinstance(provider, OpenAIProvider):
+                return provider
+        except Exception:
+            pass
+        return None
+
+    def _build_agent_system_prompt(self, objective: str) -> str:
+        """Build a system prompt for the tool-calling agent."""
+        brief = self.load_project_brief()
+        guidance = self.load_scoped_guidance()
+
+        tree_text = self.toolbox.tree(max_depth=2, max_entries=200)
+
+        parts = [
+            "You are **Nala**, an AI coding agent with full access to the project's files.",
+            "You have tools to read, write, edit, search, and navigate the codebase.",
+            "Use them to accomplish the user's objective.",
+            "",
+            f"**Project root:** {self.project_root}",
+            "",
+            "## Rules",
+            "- Always read files before editing them to understand their current content.",
+            "- Use `tree` or `list_files` to understand project structure before making changes.",
+            "- Use `search_code` to find relevant code across the indexed codebase.",
+            "- Use `edit_file` for surgical changes (provide exact text to match).",
+            "- Use `write_file` only for new files or complete rewrites.",
+            "- Use `run_shell` for running tests, lints, or build commands.",
+            "- After making changes, verify them (read the file back, run tests).",
+            "- Explain what you're doing and why as you work.",
+            "- When finished, provide a summary of all changes made.",
+            "",
+            "## Project structure",
+            tree_text[:3000],
+        ]
+        if brief:
+            parts.append(f"\n## Project brief\n{brief[:2000]}")
+        if guidance:
+            parts.append(f"\n## Scoped guidance\n{guidance[:1000]}")
+
+        return "\n".join(parts)
 
     # ── Orchestration: mission-driven execution (P7-02) ─────────────
 

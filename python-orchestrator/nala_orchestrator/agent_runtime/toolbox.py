@@ -169,6 +169,69 @@ class Toolbox:
             return f"(error listing: {e})"
         return "\n".join(entries) if entries else "(empty directory)"
 
+    def write_file(self, path: str, content: str) -> str:
+        """Write content to a file. Creates parent directories if needed."""
+        import os
+        target = Path(path) if os.path.isabs(path) else self.project_root / path
+        if not str(target.resolve()).startswith(str(self.project_root.resolve())):
+            return "(access denied: path is outside project root)"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return f"Wrote {len(content)} chars to {path}"
+        except Exception as e:
+            return f"(error writing file: {e})"
+
+    def edit_file(self, path: str, old_text: str, new_text: str) -> str:
+        """Replace exact text in a file. old_text must match verbatim."""
+        import os
+        target = Path(path) if os.path.isabs(path) else self.project_root / path
+        if not target.exists():
+            return f"(file not found: {path})"
+        if not str(target.resolve()).startswith(str(self.project_root.resolve())):
+            return "(access denied: path is outside project root)"
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+            if old_text not in content:
+                return f"(old_text not found in {path} — no changes made)"
+            count = content.count(old_text)
+            updated = content.replace(old_text, new_text, 1)
+            target.write_text(updated, encoding="utf-8")
+            return f"Replaced 1 of {count} occurrence(s) in {path}"
+        except Exception as e:
+            return f"(error editing file: {e})"
+
+    def tree(self, directory: str = "", max_depth: int = 4, max_entries: int = 500) -> str:
+        """Recursive directory listing with depth control."""
+        target = self.project_root / directory if directory else self.project_root
+        if not target.exists():
+            return f"(directory not found: {directory})"
+        skip = {"node_modules", "__pycache__", "target", ".git", ".venv",
+                "venv", "dist", "build", ".nala", ".mypy_cache", ".next",
+                ".ruff_cache", ".pytest_cache", "egg-info"}
+        lines: list[str] = []
+
+        def _walk(p: Path, prefix: str, depth: int) -> None:
+            if len(lines) >= max_entries or depth > max_depth:
+                return
+            try:
+                children = sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+            except PermissionError:
+                return
+            items = [e for e in children if e.name not in skip and not e.name.startswith(".")]
+            for i, entry in enumerate(items):
+                if len(lines) >= max_entries:
+                    lines.append(f"{prefix}...")
+                    return
+                conn = "└── " if i == len(items) - 1 else "├── "
+                lines.append(f"{prefix}{conn}{entry.name}{'/' if entry.is_dir() else ''}")
+                if entry.is_dir():
+                    ext = "    " if i == len(items) - 1 else "│   "
+                    _walk(entry, prefix + ext, depth + 1)
+
+        _walk(target, "", 0)
+        return "\n".join(lines) if lines else "(empty directory)"
+
     # ── Analysis ──────────────────────────────────────────────────────
 
     async def run_analysis(self, perspective: str = "quick") -> str:
