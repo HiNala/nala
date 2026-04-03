@@ -191,7 +191,7 @@ class AgentOrchestrator:
 
     # ── File tree ──────────────────────────────────────────────────────────
 
-    def _build_file_tree(self, max_lines: int = 120) -> str:
+    def _build_file_tree(self, max_lines: int = 200) -> str:
         """Build a compact directory tree for the system prompt.
 
         Root-level files are listed first (README, configs, etc.) so the AI
@@ -319,8 +319,8 @@ class AgentOrchestrator:
         if self._embedder is None or not self._embedder.is_ready():
             return "(index not yet available — try again after 'Index complete' appears)"
         from ..chunking.assembler import ContextAssembler
-        chunks = self._embedder.retrieve(query, top_k=30)
-        assembled = ContextAssembler().assemble(chunks, token_budget=24_000)
+        chunks = self._embedder.retrieve(query, top_k=40)
+        assembled = ContextAssembler().assemble(chunks, token_budget=32_000)
         if assembled.included_chunks == 0:
             return "(no relevant code found for this query)"
         return (

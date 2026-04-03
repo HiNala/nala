@@ -482,7 +482,7 @@ async def handle_request(
 
                     emb = await asyncio.wait_for(
                         asyncio.to_thread(_do_build),
-                        timeout=120,
+                        timeout=600,
                     )
                     _embedder = emb
                     agent.set_embedder(emb)
@@ -501,7 +501,7 @@ async def handle_request(
                     })
                 except TimeoutError:
                     log.error(
-                        "index_context: chunk build timed out (120s)",
+                        "index_context: chunk build timed out (600s)",
                     )
                 except Exception as e:
                     log.error("index_context: chunk build failed: %s", e)

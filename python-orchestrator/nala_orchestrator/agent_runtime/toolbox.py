@@ -113,7 +113,7 @@ class Toolbox:
 
     # ── File tools ─────────────────────────────────────────────────────
 
-    def read_file(self, path: str, max_lines: int = 500) -> str:
+    def read_file(self, path: str, max_lines: int = 2000) -> str:
         """Read a file from the project. Returns content or error."""
         import os
         target = Path(path) if os.path.isabs(path) else self.project_root / path
@@ -129,7 +129,7 @@ class Toolbox:
         except Exception as e:
             return f"(error reading file: {e})"
 
-    def search_code(self, query: str, max_results: int = 20) -> str:
+    def search_code(self, query: str, max_results: int = 40) -> str:
         """Search indexed code using the embedder (BM25 or vector)."""
         if self._orchestrator is None:
             return "(orchestrator not available)"
@@ -142,10 +142,10 @@ class Toolbox:
         parts = []
         for c in chunks:
             header = f"### {c.file_path}:{c.start_line}-{c.end_line}"
-            parts.append(f"{header}\n{c.content[:500]}")
+            parts.append(f"{header}\n{c.content[:1000]}")
         return "\n\n".join(parts)
 
-    def list_files(self, directory: str = "", max_entries: int = 200) -> str:
+    def list_files(self, directory: str = "", max_entries: int = 500) -> str:
         """List files in a project directory."""
         import os
         target = self.project_root / directory if directory else self.project_root

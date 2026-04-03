@@ -297,7 +297,7 @@ impl App {
 
         let mut lines = Vec::new();
         lines.push(format!("{}/", root.file_name().unwrap_or_default().to_string_lossy()));
-        Self::walk_tree(root, "", &skip, &mut lines, 0, 60);
+        Self::walk_tree(root, "", &skip, &mut lines, 0, 300);
         self.push_message(Message::assistant(lines.join("\n")));
     }
 
@@ -309,7 +309,7 @@ impl App {
         depth: usize,
         max_lines: usize,
     ) {
-        if lines.len() >= max_lines || depth > 3 {
+        if lines.len() >= max_lines || depth > 4 {
             return;
         }
         let Ok(entries) = std::fs::read_dir(dir) else { return };
@@ -370,13 +370,13 @@ impl App {
                     .strip_prefix(&self.project_root)
                     .unwrap_or(&abs)
                     .display();
-                let truncated = if line_count > 200 {
-                    let first_200: String = content.lines().take(200)
+                let truncated = if line_count > 500 {
+                    let shown: String = content.lines().take(500)
                         .collect::<Vec<_>>()
                         .join("\n");
                     format!(
-                        "**{}** ({} lines, showing first 200)\n```\n{}\n```\n\n... truncated ({} more lines)",
-                        display, line_count, first_200, line_count - 200,
+                        "**{}** ({} lines, showing first 500)\n```\n{}\n```\n\n... truncated ({} more lines)",
+                        display, line_count, shown, line_count - 500,
                     )
                 } else {
                     format!(

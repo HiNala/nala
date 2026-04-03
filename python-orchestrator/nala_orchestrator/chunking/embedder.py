@@ -20,7 +20,7 @@ from .splitter import Chunk
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_TOP_K = 10
+_DEFAULT_TOP_K = 20
 _CHROMA_COLLECTION = "nala_chunks"
 
 
@@ -143,7 +143,7 @@ class Embedder:
             col = client.create_collection(_CHROMA_COLLECTION)
             for i in range(0, len(chunks), 50):
                 batch = chunks[i : i + 50]
-                texts = [c.content[:2000] for c in batch]
+                texts = [c.content[:4000] for c in batch]
                 col.add(
                     ids=[c.id for c in batch],
                     embeddings=embed_fn(texts),

@@ -68,7 +68,7 @@ fn get_or_build_tree(root: &Path) -> Vec<CachedItem> {
 
 fn build_tree_items(root: &Path) -> Vec<CachedItem> {
     let mut items = Vec::new();
-    walk_tree(root, 0, 3, &mut items, 200);
+    walk_tree(root, 0, 4, &mut items, 1000);
     if items.is_empty() {
         items.push(CachedItem {
             text: " (empty)".to_string(),

@@ -264,7 +264,7 @@ pub struct ProjectStats {
     pub high_complexity_count: usize,
 }
 
-const MAX_MESSAGES: usize = 1_000;
+const MAX_MESSAGES: usize = 5_000;
 
 fn load_dashboard_default_port(project_root: &Path) -> u16 {
     const DEFAULT_PORT: u16 = 3000;

@@ -44,7 +44,7 @@ impl Default for ScanConfig {
             .map(String::from)
             .collect(),
 
-            max_file_size: 1024 * 1024, // 1 MB
+            max_file_size: 5 * 1024 * 1024, // 5 MB
         }
     }
 }
