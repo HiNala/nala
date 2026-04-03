@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from nala_orchestrator.chunking.embedder import Embedder
     from nala_orchestrator.config import Config
+    from nala_orchestrator.graph.context import GraphContextProvider
+    from nala_orchestrator.memory.knowledge import KnowledgeBase
     from nala_orchestrator.sessions.manager import SessionManager
 
 from ..context.background_summary import BackgroundSummary
@@ -166,6 +168,8 @@ class AgentOrchestrator:
         self._provider = None
         self._session: SessionManager | None = None
         self._embedder: Embedder | None = None
+        self._graph_ctx: GraphContextProvider | None = None
+        self._knowledge_base: KnowledgeBase | None = None
         self._token_counter = TokenCounter(model=getattr(config, "llm_model", "default"))
         self._compaction_cfg = CompactionConfig()
         self._detector = OpportunityDetector()
@@ -221,6 +225,14 @@ class AgentOrchestrator:
     def set_embedder(self, embedder: Embedder) -> None:
         """Attach an Embedder so queries are augmented with retrieved context."""
         self._embedder = embedder
+
+    def set_graph_context(self, graph_ctx: GraphContextProvider) -> None:
+        """Attach a GraphContextProvider so queries include structural insights."""
+        self._graph_ctx = graph_ctx
+
+    def set_knowledge_base(self, kb: KnowledgeBase) -> None:
+        """Attach a KnowledgeBase so queries include persistent project knowledge."""
+        self._knowledge_base = kb
 
     def _retrieve_context(self, query: str) -> str:
         """Retrieve the most relevant code chunks for a query."""
@@ -289,6 +301,25 @@ class AgentOrchestrator:
         injections = self.context.get_system_injections()
         if injections:
             base = base + "\n\n" + injections
+
+        # Graph context: structural insights from Neo4j (dependencies, call graph)
+        if self._graph_ctx and self._graph_ctx.is_available() and query:
+            try:
+                graph_block = self._graph_ctx.context_for_query(query, max_chars=3000)
+                if graph_block:
+                    base = base + "\n\n" + graph_block
+            except Exception as exc:
+                logger.debug("Graph context injection failed: %s", exc)
+
+        # Knowledge base: persistent project facts (refreshed per query)
+        if self._knowledge_base and query:
+            try:
+                kb_block = self._knowledge_base.load_for_context(query, max_chars=2000)
+                if kb_block:
+                    base = base + "\n\n[PROJECT KNOWLEDGE]\n" + kb_block + "\n[END KNOWLEDGE]"
+            except Exception as exc:
+                logger.debug("Knowledge base injection failed: %s", exc)
+
         summary = self._bg_summary.get_summary_text()
         if summary and summary != "(no session summary yet)":
             base = base + "\n\n" + summary

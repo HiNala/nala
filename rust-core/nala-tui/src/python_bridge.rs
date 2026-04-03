@@ -94,6 +94,8 @@ pub enum BridgeRequest {
     MemorySessions,
     /// Forget (clear) memory entries.
     MemoryForget { target: String },
+    /// Save a fact to the knowledge base.
+    MemorySave { fact: String },
     /// Update orchestrator-side index context.
     IndexContext {
         total_files: usize,
@@ -374,6 +376,14 @@ impl PythonBridge {
     pub async fn memory_forget(&self, target: String) -> Result<()> {
         self.request_tx
             .send(BridgeRequest::MemoryForget { target })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Save a fact to the knowledge base.
+    pub async fn memory_save(&self, fact: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::MemorySave { fact })
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -852,6 +862,11 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "memory_forget",
                                 "target": target,
+                            }),
+                            BridgeRequest::MemorySave { fact } => json!({
+                                "id": id,
+                                "type": "memory_save",
+                                "fact": fact,
                             }),
                             BridgeRequest::IndexContext {
                                 total_files,

@@ -866,6 +866,18 @@ async def handle_request(
             write_response({"id": req_id, "type": "ok",
                             "text": f"Removed {count} fact(s) matching '{target}'"})
 
+    # ── Memory: save a fact ───────────────────────────────────────────────
+    elif req_type == "memory_save":
+        fact = req.get("fact", "").strip()
+        category = req.get("category", "").strip() or None
+        if not fact:
+            write_response({"id": req_id, "type": "error",
+                            "text": "Usage: /memory save <fact to remember>"})
+        else:
+            kb = KnowledgeBase(root)
+            kb.add_fact(fact, category=category)
+            _stream_text(req_id, f"Saved to knowledge base: *{fact[:100]}*")
+
     # ── Context: usage breakdown ──────────────────────────────────────────
     elif req_type == "context_usage":
         usage = agent.get_context_usage()
@@ -1616,14 +1628,30 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
 
     handoff_ctx = handoff_reader.get_startup_injection()
     session_ctx = session_mem.get_startup_injection()
-    kb_ctx = knowledge_base.load_for_context(max_chars=2000)
 
     if handoff_ctx:
         agent.context.inject_system(handoff_ctx)
     elif session_ctx:
         agent.context.inject_system(session_ctx)
-    if kb_ctx:
-        agent.context.inject_system(f"[PROJECT KNOWLEDGE]\n{kb_ctx}\n[END KNOWLEDGE]")
+
+    # Attach knowledge base for per-query context refresh (replaces static injection)
+    agent.set_knowledge_base(knowledge_base)
+
+    # Connect Neo4j graph context provider (graceful no-op if unavailable)
+    _graph_ctx_provider = None
+    try:
+        from .graph.connection import GraphConnection
+        from .graph.context import GraphContextProvider
+
+        _graph_conn = GraphConnection(config)
+        if _graph_conn.connect():
+            _graph_ctx_provider = GraphContextProvider(_graph_conn)
+            agent.set_graph_context(_graph_ctx_provider)
+            log.info("Neo4j graph context provider attached to agent")
+        else:
+            log.debug("Neo4j unavailable — graph context disabled")
+    except Exception as e:
+        log.debug("Graph context setup skipped: %s", e)
 
     # Initialise the task ledger for this session.
     global _task_ledger
@@ -1637,6 +1665,8 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
         orchestrator=agent,
         task_ledger=_task_ledger,
     )
+    if _graph_ctx_provider:
+        _agent_manager.set_graph_context(_graph_ctx_provider)
 
     # Signal ready
     write_response({

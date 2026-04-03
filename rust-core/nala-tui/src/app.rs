@@ -1148,6 +1148,15 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/agent objective",
     "/agent missions",
     "/agent approve-missions",
+    // ── Memory & Knowledge ──
+    "/memory",
+    "/memory save",
+    "/memory sessions",
+    "/memory forget",
+    "/graph",
+    "/handoff",
+    "/handoff save",
+    "/handoff history",
     // ── Settings ──
     "/settings",
     "/settings set",

@@ -34,6 +34,7 @@ from .workers import WorkerRegistry, WorkerRole, WorkerStatus
 if TYPE_CHECKING:
     from ..agents.orchestrator import AgentOrchestrator
     from ..config import Config
+    from ..graph.context import GraphContextProvider
     from ..tasks.ledger import TaskLedger
 
 log = logging.getLogger("nala.agent_runtime.manager")
@@ -78,6 +79,7 @@ class AgentManager:
             primary_model=config.active_model(),
         )
 
+        self._graph_ctx: GraphContextProvider | None = None
         self._checkpoints: list[dict] = []
         self._pending_choices: list[str] = []
         self._pending_missions: list[MissionFile] | None = None
@@ -105,6 +107,10 @@ class AgentManager:
     def set_orchestrator(self, orch: AgentOrchestrator) -> None:
         self.toolbox.set_orchestrator(orch)
         self.research.set_orchestrator(orch)
+
+    def set_graph_context(self, graph_ctx: GraphContextProvider) -> None:
+        """Attach a graph context provider for mission planning."""
+        self._graph_ctx = graph_ctx
 
     async def ensure_registry(self) -> None:
         """Load or build the model registry (called on first /models or agent launch)."""
@@ -646,6 +652,14 @@ class AgentManager:
             parts.append(f"\n[SCOPED GUIDANCE]\n{guidance[:1000]}\n[END GUIDANCE]")
         if research_context:
             parts.append(f"\n[RESEARCH CONTEXT]\n{research_context[:3000]}\n[END RESEARCH]")
+
+        if self._graph_ctx:
+            try:
+                graph_block = self._graph_ctx.context_for_planning(objective, max_chars=4000)
+                if graph_block:
+                    parts.append(f"\n{graph_block}")
+            except Exception as exc:
+                log.debug("Graph context for planning failed: %s", exc)
 
         parts.append("""
 Generate a JSON array of missions. Each mission object must have:

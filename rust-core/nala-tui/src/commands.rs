@@ -232,6 +232,13 @@ impl App {
             "  /session               — list / create / load sessions\n",
             "  /context               — context window usage\n",
             "  /compact               — free tokens by compacting\n\n",
+            "### Memory & Knowledge\n",
+            "  /memory                — knowledge base summary\n",
+            "  /memory save <fact>    — save a fact to the knowledge base\n",
+            "  /memory sessions       — list past session memories\n",
+            "  /memory forget <topic> — remove facts matching a topic\n",
+            "  /graph                 — Neo4j graph stats\n",
+            "  /handoff               — show / save handoff docs\n\n",
             "### Settings\n",
             "  /settings              — show all configuration\n",
             "  /settings set <k> <v>  — change a setting\n",
@@ -1014,6 +1021,21 @@ impl App {
                     }
                 });
             }
+            "save" => {
+                let fact = sub.get(1).copied().unwrap_or("").trim().to_string();
+                if fact.is_empty() {
+                    self.push_message(Message::error("Usage: /memory save <fact to remember>"));
+                    return;
+                }
+                self.push_message(Message::system(format!("Saving: {}...", &fact[..fact.len().min(60)])));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.memory_save(fact).await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
             "forget" => {
                 let target = sub.get(1).copied().unwrap_or("").trim().to_string();
                 if target.is_empty() {
@@ -1031,7 +1053,7 @@ impl App {
             }
             _ => {
                 self.push_message(Message::error(
-                    "Usage: /memory | /memory sessions | /memory forget <target>",
+                    "Usage: /memory | /memory sessions | /memory save <fact> | /memory forget <target>",
                 ));
             }
         }
