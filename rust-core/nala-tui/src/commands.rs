@@ -21,6 +21,7 @@ impl App {
                     "Scanning project files (hash-only, no parsing)...",
                 ));
                 self.index_progress = Some(0.2);
+                self.index_phase = Some("Scanning files".to_string());
                 self.start_background_scan();
             }
             "/index" => {
@@ -28,6 +29,7 @@ impl App {
                     "Indexing project (parse + symbols + metrics)...",
                 ));
                 self.index_progress = Some(0.2);
+                self.index_phase = Some("Scanning files".to_string());
                 self.start_background_index();
             }
             "/analyze" | "/analyse" => {

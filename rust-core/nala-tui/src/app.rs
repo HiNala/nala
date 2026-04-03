@@ -123,6 +123,7 @@ pub enum BackgroundEvent {
         symbols: usize,
         symbol_payload: Vec<nala_indexer::Symbol>,
     },
+    IndexPhase(String),
     IndexError(String),
     AssistantChunk(String),
     AssistantDone,
@@ -196,6 +197,7 @@ pub struct App {
     pub messages: Vec<Message>,
     pub status_text: String,
     pub index_progress: Option<f64>,
+    pub index_phase: Option<String>,
     pub stats: ProjectStats,
     pub splash_start: Instant,
     pub should_quit: bool,
@@ -344,6 +346,7 @@ impl App {
             messages: Vec::new(),
             status_text: "Initializing...".to_string(),
             index_progress: None,
+            index_phase: None,
             stats: ProjectStats::default(),
             splash_start: Instant::now(),
             should_quit: false,
@@ -443,6 +446,7 @@ impl App {
         let mut last_render = Instant::now();
 
         self.index_progress = Some(0.1);
+        self.index_phase = Some("Scanning project files".to_string());
         self.start_background_index();
 
         loop {
@@ -766,8 +770,22 @@ impl App {
         let root = self.project_root.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
-            let result =
-                tokio::task::spawn_blocking(move || nala_indexer::index_project(&root)).await;
+            let _ = tx.send(BackgroundEvent::IndexPhase("Scanning files".to_string())).await;
+
+            let phase_tx = tx.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let scan = nala_indexer::scan_project(&root)?;
+                let n_to_parse = if scan.changed_files.is_empty() {
+                    scan.all_files.len()
+                } else {
+                    scan.changed_files.len()
+                };
+                let _ = phase_tx.blocking_send(BackgroundEvent::IndexPhase(
+                    format!("Parsing {} files", n_to_parse),
+                ));
+                nala_indexer::index_with_scan(scan, &root)
+            })
+            .await;
 
             match result {
                 Ok(Ok(index_result)) => {
@@ -805,6 +823,7 @@ impl App {
                 duration_ms,
             } => {
                 self.index_progress = None;
+                self.index_phase = None;
                 crate::ui::file_panel::invalidate_cache();
                 self.stats.total_files = total_files;
                 self.push_message(Message::system(format!(
@@ -822,6 +841,7 @@ impl App {
                 symbol_payload,
             } => {
                 self.index_progress = None;
+                self.index_phase = None;
                 crate::ui::file_panel::invalidate_cache();
                 self.stats.total_files = total_files;
                 self.stats.total_functions = symbols;
@@ -855,8 +875,12 @@ impl App {
                     self.start_lsp_background();
                 }
             }
+            BackgroundEvent::IndexPhase(phase) => {
+                self.index_phase = Some(phase);
+            }
             BackgroundEvent::IndexError(e) => {
                 self.index_progress = None;
+                self.index_phase = None;
                 self.push_message(Message::error(format!(
                     "Indexing failed: {}. Try running /scan first or check file permissions.",
                     e

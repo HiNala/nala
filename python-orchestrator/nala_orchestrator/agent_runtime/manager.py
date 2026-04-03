@@ -321,7 +321,7 @@ class AgentManager:
         self._transition(AgentPhase.REVIEWING)
 
     async def review(self) -> str:
-        """Review current changes (git diff + status)."""
+        """Review current changes (git diff + status + quick analysis)."""
         if self._run:
             self._transition(AgentPhase.REVIEWING)
         diff = self.toolbox.git_diff()
@@ -331,10 +331,34 @@ class AgentManager:
         if branch:
             parts.append(f"**Branch:** {branch}\n")
         parts.append(f"{diff}\n\n## Git Status\n\n{status}")
+
+        # Quick code analysis alongside the review
+        try:
+            from ..perspectives.engine import PerspectivesEngine, format_results_as_text
+            graph_conn = None
+            try:
+                from ..graph.connection import GraphConnection
+                graph_conn = GraphConnection(self.config)
+                if not graph_conn.connect():
+                    graph_conn = None
+            except Exception:
+                pass
+            engine = PerspectivesEngine(self.config, graph=graph_conn)
+            results = await engine.run_quick(str(self.project_root))
+            if results:
+                findings_count = sum(len(r.findings) for r in results)
+                if findings_count > 0:
+                    parts.append(f"\n## Code Analysis ({findings_count} findings)\n")
+                    parts.append(format_results_as_text(results))
+            if graph_conn:
+                graph_conn.close()
+        except Exception as exc:
+            log.debug("Review analysis skipped: %s", exc)
+
         return "\n".join(parts)
 
     async def verify(self) -> AsyncIterator[str]:
-        """Run verification: execute detected commands then summarise."""
+        """Run verification: test commands + code analysis perspectives."""
         if self._run:
             self._transition(AgentPhase.VERIFYING)
 
@@ -357,12 +381,42 @@ class AgentManager:
         else:
             yield "No project-specific verification commands detected.\n"
 
+        # Run quick static analysis (complexity, security, dependencies)
+        analysis_text = ""
+        try:
+            yield "## Code Analysis\n\n"
+            from ..perspectives.engine import PerspectivesEngine, format_results_as_text
+            graph_conn = None
+            try:
+                from ..graph.connection import GraphConnection
+                graph_conn = GraphConnection(self.config)
+                if not graph_conn.connect():
+                    graph_conn = None
+            except Exception:
+                pass
+            engine = PerspectivesEngine(self.config, graph=graph_conn)
+            results = await engine.run_quick(str(self.project_root))
+            if results:
+                analysis_text = format_results_as_text(results)
+                yield analysis_text + "\n\n"
+            else:
+                yield "No analysis findings from quick scan.\n\n"
+            if graph_conn:
+                graph_conn.close()
+        except Exception as exc:
+            log.debug("Verification analysis skipped: %s", exc)
+            yield f"Analysis skipped: {exc}\n\n"
+
         yield "## AI Verification Summary\n\n"
         prompt = (
             "Review the current codebase state and the following verification results:\n"
             + "\n".join(cmd_results)
-            + "\nCheck for: compilation errors, obvious bugs, test failures, "
-            "and any regressions from recent changes. Summarize findings."
+        )
+        if analysis_text:
+            prompt += f"\n\nStatic analysis findings:\n{analysis_text[:3000]}"
+        prompt += (
+            "\nCheck for: compilation errors, obvious bugs, test failures, "
+            "security issues, and any regressions from recent changes. Summarize findings."
         )
         async for chunk in self.toolbox.stream_query(prompt):
             yield chunk

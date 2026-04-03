@@ -21,7 +21,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         _ => theme::CYAN,
     };
 
-    let mut detail = if app.stats.total_files > 0 {
+    let mut detail = if app.index_progress.is_some() {
+        let phase = app.index_phase.as_deref().unwrap_or("indexing");
+        format!(" {} {}...", SPINNER[(app.splash_start.elapsed().as_millis() / 80) as usize % SPINNER.len()], phase)
+    } else if app.stats.total_files > 0 {
         format!(" {} files  {} symbols", app.stats.total_files, app.stats.total_functions)
     } else {
         format!(" {}", app.status_text)

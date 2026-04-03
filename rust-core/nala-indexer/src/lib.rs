@@ -99,8 +99,14 @@ pub fn scan_project(root: &Path) -> Result<ScanResult> {
 /// On subsequent runs, only re-parses files whose content hash has changed.
 /// Uses Rayon for parallel parsing across CPU cores.
 pub fn index_project(root: &Path) -> Result<IndexResult> {
-    let start = std::time::Instant::now();
     let scan_result = scan_project(root)?;
+    index_with_scan(scan_result, root)
+}
+
+/// Index from an already-completed scan result. Allows callers to report
+/// progress between the scan and parse phases.
+pub fn index_with_scan(scan_result: ScanResult, root: &Path) -> Result<IndexResult> {
+    let start = std::time::Instant::now();
 
     let files_to_parse = if scan_result.changed_files.is_empty() {
         scan_result.all_files.clone()
@@ -110,7 +116,6 @@ pub fn index_project(root: &Path) -> Result<IndexResult> {
 
     let symbols = parser::parse_files_parallel(&files_to_parse, root)?;
 
-    // Compute per-file metrics in parallel
     let file_metrics: Vec<metrics::FileMetrics> = files_to_parse
         .iter()
         .filter_map(|hf| {
@@ -120,7 +125,6 @@ pub fn index_project(root: &Path) -> Result<IndexResult> {
         })
         .collect();
 
-    // Update cache with symbol metadata per file
     if let Ok(mut cache) = Cache::open(root) {
         let mut symbol_counts: std::collections::HashMap<&str, (usize, &str)> =
             std::collections::HashMap::new();

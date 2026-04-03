@@ -81,6 +81,16 @@ class PerspectivesEngine:
                 return await self._run_safe(p, project_root)
         return None
 
+    async def run_quick(self, project_root: str) -> list[PerspectiveResult]:
+        """Run a fast subset: complexity, security, dependency."""
+        quick_names = {"complexity", "security", "dependency"}
+        tasks = [
+            self._run_safe(p, project_root)
+            for p in self._perspectives
+            if p.name in quick_names and self._should_run(p)
+        ]
+        return await asyncio.gather(*tasks) if tasks else []
+
     def perspective_names(self) -> list[str]:
         return [p.name for p in self._perspectives]
 
