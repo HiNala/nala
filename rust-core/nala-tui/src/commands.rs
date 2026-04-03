@@ -282,8 +282,8 @@ impl App {
             "  Ctrl+B / Ctrl+E       — file / session panels\n",
             "  Ctrl+G                — agent workbench panel\n",
             "  Tab                   — autocomplete commands\n",
-            "  Tip: text selection/copy uses your terminal by default.\n",
-            "       Set `NALA_MOUSE_CAPTURE=1` to re-enable mouse capture.\n",
+            "  Tip: hold Shift + click-drag to select text for copy.\n",
+            "       Set `NALA_NO_MOUSE=1` to disable mouse capture entirely.\n",
         )));
     }
 
