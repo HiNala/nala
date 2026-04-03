@@ -30,8 +30,10 @@ class OpenAIProvider(BaseLLMProvider):
             self._client = openai.AsyncOpenAI(
                 api_key=config.openai_api_key or "",
                 timeout=httpx.Timeout(
-                    _TIMEOUT_SECONDS,
                     connect=15.0,
+                    read=_TIMEOUT_SECONDS,   # per-chunk read timeout for streaming
+                    write=30.0,
+                    pool=10.0,
                 ),
             )
         except ImportError as e:

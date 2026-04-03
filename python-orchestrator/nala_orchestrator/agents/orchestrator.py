@@ -577,6 +577,8 @@ class AgentOrchestrator:
 
     async def stream_query(self, user_message: str) -> AsyncIterator[str]:
         """Stream a response token by token."""
+        import asyncio as _asyncio
+
         if not self.config.has_llm():
             yield (
                 "No LLM provider configured. "
@@ -593,13 +595,17 @@ class AgentOrchestrator:
         self.context.trim_to_limit()
         session.append_turn("user", user_message)
 
+        # Build the system prompt in a thread so vector search doesn't block
+        # the event loop (especially costly when thousands of symbols are indexed).
+        system_prompt = await _asyncio.to_thread(self.build_system_prompt, user_message)
+
         full_response: list[str] = []
         had_error = False
         try:
             provider = self._get_provider()
             async for chunk in provider.stream_chat(
                 messages=self.context.messages,
-                system_prompt=self.build_system_prompt(user_message),
+                system_prompt=system_prompt,
             ):
                 full_response.append(chunk)
                 yield chunk

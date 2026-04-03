@@ -682,26 +682,43 @@ async def handle_request(
         import time as _time
         _t0 = _time.monotonic()
         log.warning("QUERY START id=%s text=%r", req_id, text[:60])
-        try:
-            got_chunk = False
+
+        # Hard deadline: if no first chunk arrives within _FIRST_CHUNK_TIMEOUT or
+        # the full stream takes longer than _STREAM_TIMEOUT, cancel and error.
+        _STREAM_TIMEOUT = 90.0
+
+        got_chunk = False
+
+        async def _do_stream() -> None:
+            nonlocal got_chunk
             async for chunk in agent.stream_query(text):
                 got_chunk = True
                 write_response({"id": req_id, "type": "chunk", "text": chunk})
+
+        try:
+            await asyncio.wait_for(_do_stream(), timeout=_STREAM_TIMEOUT)
             write_response({"id": req_id, "type": "done"})
             _elapsed = _time.monotonic() - _t0
             log.warning(
                 "QUERY DONE id=%s chunks=%s elapsed=%.1fs",
                 req_id, got_chunk, _elapsed,
             )
-        except TimeoutError:
-            log.error("QUERY TIMEOUT id=%s", req_id)
+        except asyncio.TimeoutError:
+            _elapsed = _time.monotonic() - _t0
+            log.error("QUERY TIMEOUT id=%s elapsed=%.1fs", req_id, _elapsed)
             write_response({
                 "id": req_id, "type": "error",
-                "text": "LLM request timed out. Check your network and API key.",
+                "text": (
+                    f"Response timed out after {_elapsed:.0f}s — "
+                    "the API may be slow or your network is throttling the connection. "
+                    "Please try again."
+                ),
             })
+            write_response({"id": req_id, "type": "done"})
         except Exception as e:
             log.exception("QUERY ERROR id=%s: %s", req_id, e)
             write_response({"id": req_id, "type": "error", "text": str(e)})
+            write_response({"id": req_id, "type": "done"})
 
     # ── Run perspectives (streaming formatted report) ─────────────────────
     elif req_type == "run_perspectives":
