@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("nala.agent_runtime.workers")
 
-MAX_WORKERS = 3
+MAX_WORKERS = 3  # default; overridden by settings via set_max_workers()
 
 
 class WorkerRole(str, Enum):
@@ -98,9 +98,14 @@ class WorkerInfo:
 class WorkerRegistry:
     """Tracks active workers for one orchestrator run."""
 
-    def __init__(self, parent_run_id: str = "") -> None:
+    def __init__(self, parent_run_id: str = "", max_workers: int = 0) -> None:
         self._workers: dict[str, WorkerInfo] = {}
         self._parent_run_id = parent_run_id
+        self._max_workers = max_workers if max_workers > 0 else MAX_WORKERS
+
+    def set_max_workers(self, n: int) -> None:
+        if n > 0:
+            self._max_workers = n
 
     @property
     def count(self) -> int:
@@ -114,7 +119,7 @@ class WorkerRegistry:
         )
 
     def can_spawn(self) -> bool:
-        return self.active_count < MAX_WORKERS
+        return self.active_count < self._max_workers
 
     def spawn(
         self,
@@ -126,7 +131,7 @@ class WorkerRegistry:
     ) -> WorkerInfo | None:
         """Register a new worker. Returns None if limit reached."""
         if not self.can_spawn():
-            log.warning("Worker limit reached (%d/%d)", self.active_count, MAX_WORKERS)
+            log.warning("Worker limit reached (%d/%d)", self.active_count, self._max_workers)
             return None
         worker = WorkerInfo(
             label=label or objective[:30],

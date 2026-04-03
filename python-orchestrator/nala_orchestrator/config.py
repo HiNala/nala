@@ -125,7 +125,18 @@ class Config(BaseModel):
             except ValueError:
                 return default
 
-        provider = _env("LLM_PROVIDER", s.models.default_provider) or "anthropic"
+        provider = _env("LLM_PROVIDER", s.models.default_provider) or ""
+
+        # Auto-detect provider from available keys if none explicitly set
+        if not provider:
+            if _env("ANTHROPIC_API_KEY", s.keys.anthropic_api_key):
+                provider = "anthropic"
+            elif _env("OPENAI_API_KEY", s.keys.openai_api_key):
+                provider = "openai"
+            elif _env("GOOGLE_API_KEY", s.keys.google_api_key):
+                provider = "google"
+            else:
+                provider = "ollama"
 
         # Model routing: merge settings.toml routing + ROUTE_* env vars
         overrides = s.models.routing.as_overrides()

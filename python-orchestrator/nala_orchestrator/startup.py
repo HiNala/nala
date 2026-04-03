@@ -110,7 +110,22 @@ def _suggest_actions(
         or os.environ.get("GOOGLE_API_KEY")
     )
 
-    if not has_any_key and not has_settings:
+    # Also check if keys are in settings.toml
+    if not has_any_key and has_settings:
+        try:
+            import tomllib
+            with open(settings_path, "rb") as f:
+                toml_data = tomllib.load(f)
+            keys_section = toml_data.get("keys", {})
+            has_any_key = bool(
+                keys_section.get("anthropic_api_key")
+                or keys_section.get("openai_api_key")
+                or keys_section.get("google_api_key")
+            )
+        except Exception:
+            pass
+
+    if not has_any_key:
         suggestions.append("/settings setup — configure API keys and preferences")
 
     if file_count > 0 and symbol_count > 0:
@@ -146,6 +161,7 @@ def gather_startup_intelligence(
     root: Path,
     file_count: int = 0,
     symbol_count: int = 0,
+    show_hints: bool = True,
 ) -> dict:
     """Gather all proactive startup information.
 
@@ -167,10 +183,12 @@ def gather_startup_intelligence(
         else False
     )
 
-    suggestions = _suggest_actions(
-        root, project_types, git_available,
-        uncommitted_total, has_sessions, file_count, symbol_count,
-    )
+    suggestions = []
+    if show_hints:
+        suggestions = _suggest_actions(
+            root, project_types, git_available,
+            uncommitted_total, has_sessions, file_count, symbol_count,
+        )
 
     return {
         "type": "startup_intelligence",

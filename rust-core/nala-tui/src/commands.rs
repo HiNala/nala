@@ -146,20 +146,43 @@ impl App {
                 self.handle_agent_command(args);
             }
             // ── Deprecated aliases → silent redirect ───────────────────
-            "/act" | "/brain" => {
+            "/act" => {
                 let args = parts.get(1).copied().unwrap_or("").trim();
                 if args.is_empty() {
                     self.push_message(Message::system(
-                        "This command has moved to `/agent`. Try `/agent <objective>` or `/agent` for help.",
+                        "Usage: /act <instruction> — propose file edits with diff preview",
+                    ));
+                } else {
+                    self.push_message(Message::user(format!("/act {}", args)));
+                    self.send_action_query(args.to_string());
+                }
+            }
+            "/brain" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                if args.is_empty() {
+                    self.push_message(Message::system(
+                        "This command has been renamed to `/agent`. Try `/agent <objective>` or `/agent` for help.",
                     ));
                 } else {
                     self.handle_agent_command(args);
                 }
             }
-            "/task" | "/team" | "/diff" | "/branch" | "/status" => {
-                self.push_message(Message::system(
-                    "This command has moved to `/agent`. Use `/agent status`, `/agent review`, or `/agent scm`.",
-                ));
+            "/diff" => {
+                self.handle_agent_command("review");
+            }
+            "/status" => {
+                self.handle_agent_command("status");
+            }
+            "/branch" => {
+                self.handle_agent_command("scm");
+            }
+            "/team" => {
+                let args = parts.get(1).copied().unwrap_or("workers");
+                let mapped = format!("workers {}", args);
+                self.handle_agent_command(mapped.trim());
+            }
+            "/task" => {
+                self.handle_agent_command("status");
             }
             // ── Stable commands ──────────────────────────────────────────
             "/context" => self.show_context_usage(),
@@ -461,7 +484,6 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn send_action_query(&mut self, text: String) {
         match &self.python_bridge {
             None => {

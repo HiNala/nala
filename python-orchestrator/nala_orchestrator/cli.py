@@ -150,6 +150,18 @@ def _ensure_agent_scaffold(root: Path) -> None:
     for d in (agent_dir, scopes_dir, skills_dir, runs_dir):
         d.mkdir(parents=True, exist_ok=True)
 
+    # Create default settings.toml if it doesn't exist
+    settings_path = root / ".nala" / "settings.toml"
+    if not settings_path.exists():
+        try:
+            from .settings.schema import NalaSettings
+            from .settings.writer import SettingsWriter
+            writer = SettingsWriter(settings_path)
+            writer.write(NalaSettings())
+            log.info("Created default .nala/settings.toml")
+        except Exception as e:
+            log.debug("Could not create default settings: %s", e)
+
     # Migrate old .nala/brain/ artefacts if they exist
     old_brain = root / ".nala" / "brain"
     if old_brain.exists():
@@ -377,6 +389,7 @@ async def handle_request(
     agent: AgentOrchestrator,
     root: Path,
     config: Config,
+    nala_settings,
 ) -> None:
     """Dispatch one request and write response(s) to stdout."""
     req_id = req.get("id", "0")
@@ -1084,6 +1097,7 @@ async def handle_request(
                 root,
                 file_count=req.get("file_count", 0),
                 symbol_count=req.get("symbol_count", 0),
+                show_hints=nala_settings.display.show_startup_hints,
             )
             intel["id"] = req_id
             write_response(intel)
@@ -1096,6 +1110,10 @@ async def handle_request(
         objective = req.get("objective", "").strip()
         if not objective:
             write_response({"id": req_id, "type": "error", "text": "Empty objective"})
+            return
+        if not config.has_llm():
+            write_response({"id": req_id, "type": "error",
+                            "text": "No LLM configured. Run `/settings setup` to add an API key, or set LLM_PROVIDER=ollama for local models."})
             return
         if _agent_manager is None:
             write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
@@ -1352,9 +1370,14 @@ async def handle_request(
 
     elif req_type == "agent_objective":
         objective = req.get("objective", "").strip()
-        autonomy = req.get("autonomy", "autonomous").strip()
+        autonomy = req.get("autonomy", "").strip() or nala_settings.agent.autonomy
         if not objective:
             write_response({"id": req_id, "type": "error", "text": "Usage: /agent objective <goal>"})
+            write_response({"id": req_id, "type": "done"})
+            return
+        if not config.has_llm():
+            write_response({"id": req_id, "type": "error",
+                            "text": "No LLM configured. Run `/settings setup` to add an API key, or set LLM_PROVIDER=ollama for local models."})
             write_response({"id": req_id, "type": "done"})
             return
         if _agent_manager is None:
@@ -1433,6 +1456,21 @@ async def handle_request(
             loader = SettingsLoader(root)
             settings = loader.load()
             writer = SettingsWriter(loader.project_path)
+            # Lightweight validation for common settings mistakes
+            if key == "models.default_provider" and value not in {"anthropic", "openai", "google", "ollama"}:
+                write_response({
+                    "id": req_id,
+                    "type": "error",
+                    "text": "Invalid provider. Use one of: anthropic, openai, google, ollama.",
+                })
+                return
+            if key.startswith("models.routing.") and value and ("/" not in value and ":" not in value):
+                write_response({
+                    "id": req_id,
+                    "type": "error",
+                    "text": "Invalid routing value. Use provider/model (or provider:model).",
+                })
+                return
             msg = writer.set_value(key, value, settings)
             _stream_text(req_id, msg)
         except Exception as e:
@@ -1451,30 +1489,44 @@ async def handle_request(
             has_google = bool(settings.keys.google_api_key)
 
             lines = ["## Nala Settings Setup\n"]
-            lines.append("Current configuration:\n")
-            lines.append(f"  Anthropic key: {'configured' if has_anthropic else 'missing'}")
-            lines.append(f"  OpenAI key:    {'configured' if has_openai else 'missing'}")
-            lines.append(f"  Google key:    {'configured' if has_google else 'missing'}")
-            lines.append(f"  Provider:      {settings.models.default_provider}")
-            lines.append(f"  Model:         {settings.models.default_model}")
-            lines.append(f"  Autonomy:      {settings.agent.autonomy}")
-            lines.append("")
 
-            if not any([has_anthropic, has_openai, has_google]):
-                lines.append("**No API keys configured.** To get started:\n")
-                lines.append("  `/settings set keys.anthropic_api_key sk-ant-...`")
-                lines.append("  `/settings set keys.openai_api_key sk-...`")
-                lines.append("  `/settings set keys.google_api_key AIza...`")
-            else:
-                lines.append("**To change settings:**\n")
-                lines.append("  `/settings set models.default_provider openai`")
-                lines.append("  `/settings set models.default_model gpt-4o`")
-                lines.append("  `/settings set models.routing.plan anthropic/claude-opus-4-6`")
-                lines.append("  `/settings set agent.autonomy autonomous`")
-                lines.append("  `/settings set agent.git.auto_branch true`")
+            lines.append("### Step 1: API Keys\n")
+            key_status = [
+                ("Anthropic", has_anthropic, "keys.anthropic_api_key", "sk-ant-..."),
+                ("OpenAI", has_openai, "keys.openai_api_key", "sk-..."),
+                ("Google", has_google, "keys.google_api_key", "AIza..."),
+            ]
+            for name, has_key, setting_key, example in key_status:
+                icon = "+" if has_key else "x"
+                lines.append(f"  [{icon}] {name}: {'configured' if has_key else 'not set'}")
+                if not has_key:
+                    lines.append(f"      Set with: `/settings set {setting_key} {example}`")
 
-            lines.append("")
-            lines.append(f"Settings file: `{loader.project_path}`")
+            any_key = any([has_anthropic, has_openai, has_google])
+            if not any_key:
+                lines.append("\n  **Or** set keys in `.env` file or environment variables.")
+                lines.append("  Ollama works without a key: `/settings set models.default_provider ollama`")
+
+            lines.append("\n### Step 2: Choose Your Model\n")
+            lines.append(f"  Current: **{settings.models.default_provider}** / {settings.models.default_model}")
+            lines.append("  Change with:")
+            lines.append("    `/settings set models.default_provider openai`")
+            lines.append("    `/settings set models.default_model gpt-4o`")
+
+            lines.append("\n### Step 3: Agent Behavior (optional)\n")
+            lines.append(f"  Autonomy: {settings.agent.autonomy} (observe|plan|patch|autonomous)")
+            lines.append(f"  Max workers: {settings.agent.max_workers}")
+            lines.append(f"  Git auto-branch: {'yes' if settings.agent.git.auto_branch else 'no'}")
+            lines.append("  Change with: `/settings set agent.autonomy autonomous`")
+
+            lines.append("\n### Step 4: Route Models Per Task (optional)\n")
+            lines.append("  Use different models for different tasks:")
+            lines.append("    `/settings set models.routing.plan anthropic/claude-sonnet-4-6`")
+            lines.append("    `/settings set models.routing.code openai/gpt-4o`")
+            lines.append("    `/settings set models.routing.review anthropic/claude-sonnet-4-6`")
+
+            lines.append(f"\n### Settings file: `{loader.project_path}`")
+            lines.append("\nView all: `/settings show`  |  Help: `/settings help`")
 
             if not loader.has_project_settings():
                 writer = SettingsWriter(loader.project_path)
@@ -1608,6 +1660,11 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
     root = Path(project_root) if project_root else Path.cwd()
     _ensure_agent_scaffold(root)
     config = Config.load(project_root=root)
+
+    # Load user settings (TOML + env) for agent/display configuration
+    from .settings.loader import SettingsLoader
+    _nala_settings = SettingsLoader(root).load()
+
     agent = AgentOrchestrator(config)
 
     # Auto-create a session on startup so the first query is always logged
@@ -1665,6 +1722,7 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
         orchestrator=agent,
         task_ledger=_task_ledger,
     )
+    _agent_manager.apply_settings(_nala_settings)
     if _graph_ctx_provider:
         _agent_manager.set_graph_context(_graph_ctx_provider)
 
@@ -1679,7 +1737,10 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
 
     # Send proactive startup intelligence immediately after ready.
     try:
-        intel = gather_startup_intelligence(root)
+        intel = gather_startup_intelligence(
+            root,
+            show_hints=_nala_settings.display.show_startup_hints,
+        )
         write_response(intel)
     except Exception:
         log.debug("Startup intelligence gathering failed", exc_info=True)
@@ -1694,7 +1755,7 @@ async def run_ipc_loop(project_root: str | None = None) -> None:
                 continue
             req = json.loads(line)
             log.warning("IPC RECV type=%s id=%s", req.get("type"), req.get("id"))
-            await handle_request(req, agent, root, config)
+            await handle_request(req, agent, root, config, _nala_settings)
         except json.JSONDecodeError as e:
             write_response({"type": "error", "text": f"JSON parse error: {e}"})
         except Exception as e:

@@ -70,7 +70,7 @@ class Toolbox:
         if self._task_ledger is None:
             return "(task ledger not available)"
         task = self._task_ledger.create_task(objective)
-        return task.id
+        return task.task_id
 
     def task_status(self) -> str:
         if self._task_ledger is None:
@@ -81,7 +81,7 @@ class Toolbox:
         if self._task_ledger is None:
             return "(task ledger not available)"
         task = self._task_ledger.complete_current(summary)
-        return f"Task {task.id} completed" if task else "No active task"
+        return f"Task {task.task_id} completed" if task else "No active task"
 
     # ── Multi-agent ───────────────────────────────────────────────────
 
@@ -111,17 +111,77 @@ class Toolbox:
         lead = self._ensure_lead()
         lead.bus.send("orchestrator", worker_id, message)
 
+    # ── File tools ─────────────────────────────────────────────────────
+
+    def read_file(self, path: str, max_lines: int = 500) -> str:
+        """Read a file from the project. Returns content or error."""
+        import os
+        target = Path(path) if os.path.isabs(path) else self.project_root / path
+        if not target.exists():
+            return f"(file not found: {path})"
+        if not str(target.resolve()).startswith(str(self.project_root.resolve())):
+            return "(access denied: path is outside project root)"
+        try:
+            lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+            if len(lines) > max_lines:
+                return "\n".join(lines[:max_lines]) + f"\n... ({len(lines) - max_lines} more lines)"
+            return "\n".join(lines)
+        except Exception as e:
+            return f"(error reading file: {e})"
+
+    def search_code(self, query: str, max_results: int = 20) -> str:
+        """Search indexed code using the embedder (BM25 or vector)."""
+        if self._orchestrator is None:
+            return "(orchestrator not available)"
+        emb = self._orchestrator._embedder
+        if emb is None or not emb.is_ready():
+            return "(index not yet available — run /index first)"
+        chunks = emb.retrieve(query, top_k=max_results)
+        if not chunks:
+            return "(no matches found)"
+        parts = []
+        for c in chunks:
+            header = f"### {c.file_path}:{c.start_line}-{c.end_line}"
+            parts.append(f"{header}\n{c.content[:500]}")
+        return "\n\n".join(parts)
+
+    def list_files(self, directory: str = "", max_entries: int = 200) -> str:
+        """List files in a project directory."""
+        import os
+        target = self.project_root / directory if directory else self.project_root
+        if not target.exists():
+            return f"(directory not found: {directory})"
+        entries = []
+        try:
+            for item in sorted(target.iterdir()):
+                if item.name.startswith(".") or item.name in ("node_modules", "__pycache__", "target", ".git"):
+                    continue
+                prefix = "d " if item.is_dir() else "f "
+                size = ""
+                if item.is_file():
+                    sz = item.stat().st_size
+                    size = f" ({sz:,}b)" if sz < 100_000 else f" ({sz // 1024}kb)"
+                entries.append(f"{prefix}{item.name}{size}")
+                if len(entries) >= max_entries:
+                    entries.append(f"... (truncated at {max_entries})")
+                    break
+        except Exception as e:
+            return f"(error listing: {e})"
+        return "\n".join(entries) if entries else "(empty directory)"
+
     # ── Analysis ──────────────────────────────────────────────────────
 
     async def run_analysis(self, perspective: str = "quick") -> str:
-        if self._orchestrator is None:
-            return "(orchestrator not available)"
+        """Run code analysis. perspective: 'quick', 'all', or a specific name."""
         from ..perspectives.engine import PerspectivesEngine, format_results_as_text
         engine = PerspectivesEngine(self.config)
-        results = await engine.run(
-            str(self.project_root),
-            perspective if perspective != "all" else None,
-        )
+        if perspective == "all":
+            results = await engine.run_all(str(self.project_root))
+        elif perspective == "quick":
+            results = await engine.run_quick(str(self.project_root))
+        else:
+            one = await engine.run_one(perspective, str(self.project_root))
+            results = [one] if one else []
         return format_results_as_text(results)
 
     # ── Shell / verification ────────────────────────────────────────

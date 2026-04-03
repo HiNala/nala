@@ -287,11 +287,12 @@ def cleanup_worktree(root: Path, label: str) -> bool:
 # ── Agent orchestration git operations ────────────────────────────────
 
 
-def create_agent_branch(root: Path, run_id: str) -> str | None:
+def create_agent_branch(root: Path, run_id: str, branch_prefix: str = "nala/agent-") -> str | None:
     """Create a feature branch for an agent run. Returns branch name or None."""
     if not is_git_repo(root):
         return None
-    branch = f"nala/agent-{run_id}"
+    prefix = branch_prefix if branch_prefix else "nala/agent-"
+    branch = f"{prefix}{run_id}"
     existing = current_branch(root)
     if existing == branch:
         return branch

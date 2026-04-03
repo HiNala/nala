@@ -80,6 +80,12 @@ class AgentManager:
         )
 
         self._graph_ctx: GraphContextProvider | None = None
+        self._default_autonomy: str = "plan"
+        self._auto_branch: bool = True
+        self._branch_prefix: str = "nala/agent-"
+        self._auto_commit: bool = True
+        self._auto_verify: bool = True
+        self._verify_timeout: int = 120
         self._checkpoints: list[dict] = []
         self._pending_choices: list[str] = []
         self._pending_missions: list[MissionFile] | None = None
@@ -103,6 +109,24 @@ class AgentManager:
         return self._run is not None and self._run.phase not in (
             AgentPhase.IDLE, AgentPhase.DONE, AgentPhase.CANCELLED,
         )
+
+    def apply_settings(self, settings) -> None:
+        """Apply NalaSettings to configure agent behavior at runtime."""
+        self._default_autonomy = settings.agent.autonomy
+        self._workers.set_max_workers(settings.agent.max_workers)
+        self._auto_branch = settings.agent.git.auto_branch
+        self._branch_prefix = settings.agent.git.branch_prefix
+        self._auto_commit = settings.agent.git.auto_commit
+        self._auto_verify = settings.agent.verification.auto_verify
+        self._verify_timeout = settings.agent.verification.verify_timeout
+
+    @staticmethod
+    def _normalize_autonomy(value: str) -> str:
+        """Map legacy setting values to runtime autonomy enum values."""
+        v = (value or "").strip().lower()
+        if v == "guided":
+            return "plan"
+        return v
 
     def set_orchestrator(self, orch: AgentOrchestrator) -> None:
         self.toolbox.set_orchestrator(orch)
@@ -369,7 +393,7 @@ class AgentManager:
             yield "## Running verification commands\n\n"
             for cmd in commands:
                 yield f"**`{cmd}`** → "
-                result = self.toolbox.run_shell(cmd)
+                result = self.toolbox.run_shell(cmd, timeout=self._verify_timeout)
                 passed = result["exit_code"] == 0
                 status = "PASS" if passed else "FAIL"
                 yield f"{status}\n"
@@ -526,7 +550,7 @@ class AgentManager:
         """
         run = self.start(objective)
         try:
-            run.autonomy = AutonomyLevel(autonomy)
+            run.autonomy = AutonomyLevel(self._normalize_autonomy(autonomy))
         except ValueError:
             run.autonomy = AutonomyLevel.AUTONOMOUS
         save_run(self.project_root, run)
@@ -534,14 +558,20 @@ class AgentManager:
         from .. import git_ops
 
         original_branch = git_ops.current_branch(self.project_root) or "main"
-        if git_ops.is_git_repo(self.project_root):
-            branch = git_ops.create_agent_branch(self.project_root, run.run_id)
+        if git_ops.is_git_repo(self.project_root) and self._auto_branch:
+            branch = git_ops.create_agent_branch(
+                self.project_root,
+                run.run_id,
+                branch_prefix=self._branch_prefix,
+            )
             if branch:
                 run.git_branch = branch
                 save_run(self.project_root, run)
                 yield f"**Git:** Created branch `{branch}`\n\n"
             else:
                 yield "**Git:** Could not create agent branch (continuing on current branch)\n\n"
+        elif git_ops.is_git_repo(self.project_root):
+            yield "**Git:** Auto-branch disabled in settings; staying on current branch.\n\n"
 
         # Phase 1: Research
         self._transition(AgentPhase.RESEARCHING)
@@ -594,7 +624,7 @@ class AgentManager:
         plan_summary = self._format_mission_plan(missions)
         yield plan_summary + "\n"
 
-        if git_ops.is_git_repo(self.project_root):
+        if git_ops.is_git_repo(self.project_root) and self._auto_commit:
             git_ops.commit_milestone(
                 self.project_root,
                 f"[nala] Plan: {len(missions)} missions for '{objective[:50]}'",
@@ -686,7 +716,7 @@ class AgentManager:
         ]
         save_run(self.project_root, run)
 
-        if git_ops.is_git_repo(self.project_root) and completed > 0:
+        if git_ops.is_git_repo(self.project_root) and completed > 0 and self._auto_commit:
             git_ops.commit_milestone(
                 self.project_root,
                 f"[nala] Executed {completed}/{len(missions)} missions for run {run.run_id}",

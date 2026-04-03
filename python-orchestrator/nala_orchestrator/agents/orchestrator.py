@@ -55,6 +55,14 @@ Primary language: {primary_language}
 - Generate refactoring plans with step-by-step actions
 - When the user uses /act, you can propose file edits, file creation, and shell commands
 
+## Agent tools (available during /agent runs)
+- **read_file(path)** — read any file in the project
+- **search_code(query)** — search indexed code for relevant functions/classes
+- **list_files(directory)** — list files in a directory
+- **run_shell(command)** — execute a shell command (tests, lints, builds)
+- **git_diff / git_status / git_branch** — inspect git state
+- **run_analysis(scope)** — run static analysis (complexity, security, dependencies)
+
 ## Response guidelines
 - Be concise and specific — cite file:line references
 - Use markdown formatting: **bold**, `inline code`, ```code blocks```
