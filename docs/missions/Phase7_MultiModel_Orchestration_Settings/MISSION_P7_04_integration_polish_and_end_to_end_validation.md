@@ -102,54 +102,54 @@ A worker encounters a failing test or build error mid-run:
 
 ### Model Layer
 
-- [ ] `/models` displays correct, current model information
-- [ ] API key validation works for all three providers
-- [ ] Registry persists and refreshes correctly
-- [ ] Router returns appropriate models for each task type
-- [ ] Fallback behavior works when a preferred provider is unavailable
-- [ ] Cost tiers are approximately correct
+- [x] `/models` displays correct, current model information
+- [x] API key validation works for all three providers
+- [x] Registry persists and refreshes correctly
+- [x] Router returns appropriate models for each task type
+- [x] Fallback behavior works when a preferred provider is unavailable
+- [x] Cost tiers are approximately correct
 
 ### Orchestration Layer
 
-- [ ] Research phase uses a research-grade model
-- [ ] Planning phase produces valid mission `.md` files
-- [ ] Mission files follow the defined format
-- [ ] Dependencies between missions are respected
-- [ ] Parallel missions actually run in parallel
-- [ ] Sequential missions actually wait for dependencies
-- [ ] Git branching and committing works reliably
-- [ ] Worktree isolation works for parallel workers
-- [ ] The execution loop actually loops until completion
-- [ ] User questions from workers appear in the interpreter
+- [x] Research phase uses a research-grade model
+- [x] Planning phase produces valid mission `.md` files
+- [x] Mission files follow the defined format
+- [x] Dependencies between missions are respected
+- [x] Parallel missions actually run in parallel
+- [x] Sequential missions actually wait for dependencies
+- [x] Git branching and committing works reliably
+- [x] Worktree isolation works for parallel workers
+- [x] The execution loop actually loops until completion
+- [x] User questions from workers appear in the interpreter
 
 ### Settings Layer
 
-- [ ] `/settings` shows an accurate summary
-- [ ] `/settings set` persists changes immediately
-- [ ] `/settings setup` wizard completes without errors
-- [ ] Project-level settings override global settings
-- [ ] `.env` keys still work and take precedence
-- [ ] Missing keys produce actionable suggestions
+- [x] `/settings` shows an accurate summary
+- [x] `/settings set` persists changes immediately
+- [x] `/settings setup` wizard completes without errors
+- [x] Project-level settings override global settings
+- [x] `.env` keys still work and take precedence
+- [x] Missing keys produce actionable suggestions
 
 ### Integration
 
-- [ ] Settings feed into the model registry correctly
-- [ ] The model registry feeds into the router correctly
-- [ ] The router feeds into the orchestrator correctly
-- [ ] The orchestrator feeds into the spawner correctly
-- [ ] Worker results feed back into the orchestrator correctly
-- [ ] Orchestrator summaries feed into the interpreter correctly
-- [ ] Git operations do not conflict between workers
-- [ ] The entire flow works on Windows (path handling, process spawning)
+- [x] Settings feed into the model registry correctly
+- [x] The model registry feeds into the router correctly
+- [x] The router feeds into the orchestrator correctly
+- [x] The orchestrator feeds into the spawner correctly
+- [x] Worker results feed back into the orchestrator correctly
+- [x] Orchestrator summaries feed into the interpreter correctly
+- [x] Git operations do not conflict between workers
+- [x] The entire flow works on Windows (path handling, process spawning)
 
 ### UX Polish
 
-- [ ] The interpreter terminal stays calm and readable during complex runs
-- [ ] Error messages tell the user what to do, not just what went wrong
-- [ ] Progress updates are concise and timely
-- [ ] The plan presentation is clear enough to approve or reject
-- [ ] Worker attach/inspect flow works smoothly
-- [ ] `/help` accurately reflects the current command surface
+- [x] The interpreter terminal stays calm and readable during complex runs
+- [x] Error messages tell the user what to do, not just what went wrong
+- [x] Progress updates are concise and timely
+- [x] The plan presentation is clear enough to approve or reject
+- [x] Worker attach/inspect flow works smoothly
+- [x] `/help` accurately reflects the current command surface
 
 ## Implementation Steps
 
@@ -200,11 +200,11 @@ Potentially any file changed in Missions P7-01 through P7-03, plus:
 
 ## Acceptance Criteria
 
-- [ ] All four validation scenarios pass without crashes or silent failures
-- [ ] A real multi-file project can be built end-to-end using `/agent`
-- [ ] The model layer, orchestration layer, and settings layer integrate cleanly
-- [ ] Documentation is current and accurate
-- [ ] The product feels like one coherent system, not a collection of partially connected features
+- [x] All four validation scenarios pass without crashes or silent failures
+- [x] A real multi-file project can be built end-to-end using `/agent`
+- [x] The model layer, orchestration layer, and settings layer integrate cleanly
+- [x] Documentation is current and accurate
+- [x] The product feels like one coherent system, not a collection of partially connected features
 
 ## Estimated Complexity
 

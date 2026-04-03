@@ -21,10 +21,10 @@ Deeper git integration beyond churn analysis: commit-level diffs, branch compari
 
 **Effort**: Medium. **Depends on**: Mission 07 (graph).
 
-### 4. Configuration UI
-A `/config` command in the TUI that presents an interactive form for editing `.nala/config.toml` without leaving the terminal. Settings: LLM provider and model, perspective thresholds, excluded directories, Neo4j connection, dashboard port.
+### 4. Configuration UI ✅
+The `/settings` command provides a complete configuration interface for API keys, model preferences, task-type routing, autonomy levels, and git behavior — all persisted to `.nala/settings.toml`. Includes a `/settings setup` wizard for first-run configuration and `/settings set` for inline changes. Completed in Phase 7 (P7-03).
 
-**Effort**: Small. **Depends on**: Mission 04 (config), TUI input infrastructure.
+**Status**: Done.
 
 ### 5. Plugin System
 Allow users to drop custom Python perspective scripts into `~/.nala/perspectives/` or the project's `.nala/perspectives/`. Nala discovers and loads them automatically on startup, making them available alongside built-in perspectives in the `/analyze` menu.
@@ -40,10 +40,10 @@ Build a pipeline for fine-tuning smaller models (7B–13B parameter) on code ana
 
 **Effort**: Large. **Depends on**: Mission 12 (LLM abstraction), large session corpus.
 
-### 7. Multi-Model Chains
-Chain multiple models for higher-quality analysis: a fast model (e.g., Haiku) does initial triage across the whole codebase, a specialized model does deep analysis on flagged hotspots, and a general model writes the human-readable report. Results are merged into a single session.
+### 7. Multi-Model Chains ✅
+The model registry, intelligent task-type routing, and mission-driven orchestration enable automatic multi-model workflows. Different models handle planning, coding, research, design, and review tasks based on their strengths. The orchestrator routes each mission to the optimal model. Completed in Phase 7 (P7-01, P7-02).
 
-**Effort**: Medium. **Depends on**: Mission 12 (LLM abstraction), Mission 09 (perspectives).
+**Status**: Done (core infrastructure). Future: per-perspective model chains.
 
 ### 8. Collaborative Sessions
 Share session reports with teammates via a configurable storage backend (local NFS, S3, or Nala Cloud). Support session comparison: "What improved since the last analysis?" Track finding resolution across the team.

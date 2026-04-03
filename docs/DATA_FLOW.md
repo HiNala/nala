@@ -1,8 +1,9 @@
 # Nala: Data Flow and Integration Patterns
 
-This document traces the six major data flows through the Nala system, from user
+This document traces the major data flows through the Nala system, from user
 input to rendered output, and describes the integration patterns used to connect
-the Rust core, Python orchestration layer, Neo4j graph, and LLM providers.
+the Rust core, Python orchestration layer, Neo4j graph, LLM providers, model
+registry, settings system, and mission-driven orchestrator.
 
 ---
 
@@ -335,3 +336,137 @@ ResearchService.research()
 
 Research is bounded: max 10 queries per run, max 5 sources per query.
 Recent research is automatically injected into planning context.
+
+---
+
+## Flow 8: Settings and Configuration (Phase 7)
+
+```
+User: /settings setup
+  │
+  ▼
+commands.rs::handle_settings_command("setup")
+  │  bridge.settings_setup()
+  ▼
+cli.py → "settings_setup"
+  │  SettingsLoader(project_root).load()
+  │  └── 1. Read ~/.nala/settings.toml (global)
+  │  └── 2. Read .nala/settings.toml (project)
+  │  └── 3. Apply env var overrides
+  │  SettingsWriter → .nala/settings.toml
+  ▼
+TUI shows wizard with current state + instructions
+
+User: /settings set keys.anthropic_api_key sk-ant-...
+  │
+  ▼
+cli.py → "settings_set"
+  │  SettingsWriter.set_value("keys.anthropic_api_key", "sk-ant-...")
+  │  → writes updated .nala/settings.toml
+  ▼
+Next Config.load() picks up the new value
+```
+
+### Settings Priority Chain
+
+```
+Highest ─► Environment variables (always win)
+         ► .env file (loaded by dotenv)
+         ► .nala/settings.toml (project-level)
+         ► ~/.nala/settings.toml (global)
+Lowest  ─► Built-in defaults
+```
+
+---
+
+## Flow 9: Model Registry and Routing (Phase 7)
+
+```
+Config.load()
+  │  reads model_overrides from settings.toml + ROUTE_* env vars
+  ▼
+ModelRegistry(config)
+  │  ensure_loaded()
+  │  ├── try _load_from_disk() (.nala/models/registry.json)
+  │  └── fallback: refresh()
+  │      ├── _probe_anthropic()  → lightweight API call
+  │      ├── _probe_openai()     → models.list()
+  │      ├── _probe_google()     → genai.list_models()
+  │      └── _probe_ollama()     → HTTP GET /api/tags
+  │  _persist() → .nala/models/registry.json
+  ▼
+ModelRouter(registry, overrides, primary_provider, primary_model)
+  │  route(TaskType.CODE)
+  │  ├── check user overrides first
+  │  ├── score models by strength_score(task)
+  │  └── fallback to primary model if no matches
+  ▼
+Returns RouteResult(provider, model_id, reason)
+  │  used by AgentOrchestrator and MissionExecutor
+  ▼
+create_provider_for(provider, model_id, config) → LLM provider instance
+```
+
+---
+
+## Flow 10: Mission-Driven Orchestration (Phase 7)
+
+```
+User: /agent objective "build a REST API"
+  │
+  ▼
+commands.rs → agent_dispatch → bridge.agent_objective()
+  │
+  ▼
+cli.py → "agent_objective"
+  │  phase_update("starting")
+  ▼
+AgentManager.start_objective()
+  │
+  ├── Phase 1: Research
+  │   ResearchService.research() → LLM gathers context
+  │
+  ├── Phase 2: Generate Missions
+  │   _build_plan_prompt() → LLM generates JSON mission array
+  │   MissionWriter.parse_plan_output() → list[MissionFile]
+  │   MissionWriter.write_missions() → .nala/agent/missions/<run_id>/
+  │   git: commit_milestone() for the plan
+  │
+  ├── Phase 3: Await Approval (if autonomy ≠ autonomous)
+  │   _transition(AWAITING_APPROVAL)
+  │   user → /agent approve-missions
+  │
+  └── Phase 4: Execute Missions
+      MissionExecutor.execute_all()
+        ├── _get_ready_missions() → dependency resolution
+        ├── _group_parallel() → identify parallel groups
+        ├── for each mission:
+        │   ├── ModelRouter.route(task_type) → pick model
+        │   ├── AgentOrchestrator(model_override) → run LLM
+        │   ├── _execute_with_retry() → 1 automatic retry on failure
+        │   └── update manifest status
+        ├── git: commit_milestone() after completed missions
+        └── yield progress text to TUI
+
+      Phase 5: Final Summary
+        git_ops.get_run_diff_summary() → show what changed
+        _transition(DONE)
+```
+
+### Mission File Format
+
+Each mission is written as a `.md` file in `.nala/agent/missions/<run_id>/`:
+
+```
+MISSION_01_<slug>.md
+MISSION_02_<slug>.md
+manifest.json           ← tracks status of all missions
+```
+
+### Error Recovery
+
+- **Per-mission failures** are isolated — other missions continue
+- **Automatic retry** (1 attempt) before marking FAILED
+- **Deadlock detection** when no missions can proceed due to unresolved dependencies
+- **Friendly error messages** translate API errors into actionable suggestions
+- **No orphaned state** — manifest always reflects current status
