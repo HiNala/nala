@@ -50,6 +50,8 @@ fn next_id() -> String {
 pub enum BridgeRequest {
     /// Natural-language LLM query.
     Query { text: String, project_root: PathBuf },
+    /// Same as Query but tells Python to skip actionable-intent suggestion.
+    QuerySkipSuggest { text: String, project_root: PathBuf },
     /// Run all analysis perspectives.
     RunPerspectives { project_root: PathBuf, perspective: String },
     /// List past sessions.
@@ -178,6 +180,14 @@ impl PythonBridge {
     pub async fn query(&self, text: String, project_root: PathBuf) -> Result<()> {
         self.request_tx
             .send(BridgeRequest::Query { text, project_root })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Send a query that skips the actionable-intent auto-suggestion.
+    pub async fn query_skip_suggest(&self, text: String, project_root: PathBuf) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::QuerySkipSuggest { text, project_root })
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -757,6 +767,13 @@ async fn bridge_task(
                                 "text": text,
                                 "project_root": project_root.to_string_lossy(),
                             }),
+                            BridgeRequest::QuerySkipSuggest { text, project_root } => json!({
+                                "id": id,
+                                "type": "query",
+                                "text": text,
+                                "project_root": project_root.to_string_lossy(),
+                                "skip_suggest": true,
+                            }),
                             BridgeRequest::RunPerspectives { project_root, perspective } => json!({
                                 "id": id,
                                 "type": "run_perspectives",
@@ -1249,6 +1266,19 @@ async fn handle_response(raw: &str, bg_tx: &mpsc::Sender<BackgroundEvent>) {
             if !text.is_empty() {
                 let _ = bg_tx.send(BackgroundEvent::SystemMessage(text)).await;
             }
+        }
+        "suggest_agent" => {
+            let objective = msg
+                .get("objective")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            let text = msg
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("Launch agent for this task? (y/n)")
+                .to_string();
+            let _ = bg_tx.send(BackgroundEvent::AgentSuggestion { objective, text }).await;
         }
         "proposed_action" => {
             let action_id = msg.get("action_id").and_then(|v| v.as_str()).unwrap_or("").to_string();

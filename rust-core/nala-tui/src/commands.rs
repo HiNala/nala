@@ -508,6 +508,37 @@ impl App {
         }
     }
 
+    /// Launch the agent with a given objective (used by auto-suggest y/n flow).
+    pub(crate) fn launch_agent(&mut self, objective: String) {
+        self.agent_dispatch(move |b, _tx| async move {
+            b.agent_start(objective).await.map_err(|e| e.to_string())
+        });
+    }
+
+    /// Re-send a query but tell Python to skip the actionable-intent suggestion.
+    pub(crate) fn send_llm_query_skip_suggest(&mut self, text: String) {
+        match &self.python_bridge {
+            None => {
+                self.push_message(Message::system(
+                    "AI bridge is starting up — please wait a moment and try again.",
+                ));
+            }
+            Some(bridge) => {
+                let bridge = bridge.clone();
+                let root = self.project_root.clone();
+                let tx = self.bg_tx.clone();
+                self.mode = AppMode::Analyzing;
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.query_skip_suggest(text, root).await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
+        }
+    }
+
     fn show_context_usage(&mut self) {
         let Some(bridge) = self.python_bridge.clone() else {
             self.push_message(Message::system("AI bridge not ready."));

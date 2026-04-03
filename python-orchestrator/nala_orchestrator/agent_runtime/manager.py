@@ -569,26 +569,48 @@ class AgentManager:
         """Build a system prompt for the tool-calling agent."""
         brief = self.load_project_brief()
         guidance = self.load_scoped_guidance()
-
         tree_text = self.toolbox.tree(max_depth=2, max_entries=200)
 
+        orch = self.toolbox.orchestrator
+        total_files = orch.context.total_files if orch else 0
+        total_symbols = orch.context.total_symbols if orch else 0
+        primary_lang = orch.context.primary_language if orch else "unknown"
+
         parts = [
-            "You are **Nala**, an AI coding agent with full access to the project's files.",
-            "You have tools to read, write, edit, search, and navigate the codebase.",
-            "Use them to accomplish the user's objective.",
+            "You are **Nala**, an autonomous AI coding agent embedded in a terminal IDE.",
+            "You have real tools to read, write, edit, search, and navigate the codebase.",
+            "You MUST use these tools — do not hallucinate file contents or guess at code.",
             "",
             f"**Project root:** {self.project_root}",
+            f"**Files indexed:** {total_files}",
+            f"**Symbols extracted:** {total_symbols}",
+            f"**Primary language:** {primary_lang}",
+            "",
+            "## Available tools",
+            "- `read_file(path)` — Read a file's contents. ALWAYS read before editing.",
+            "- `write_file(path, content)` — Create a new file or overwrite entirely.",
+            "- `edit_file(path, old_text, new_text)` — Replace exact text in a file.",
+            "  The `old_text` must match verbatim (whitespace-sensitive).",
+            "- `list_files(directory)` — List files and dirs at one level.",
+            "- `tree(directory, max_depth)` — Recursive directory listing.",
+            "- `search_code(query)` — Semantic search across indexed code.",
+            "- `run_shell(command)` — Execute a shell command (tests, lints, builds).",
+            "- `git_status()` — Current git branch, modified files, staged changes.",
+            "- `git_diff()` — Show current uncommitted changes.",
+            "",
+            "## Workflow",
+            "1. **Understand** — Start by reading relevant files and exploring structure.",
+            "2. **Plan** — Briefly explain your approach before making changes.",
+            "3. **Execute** — Make changes using edit_file (preferred) or write_file.",
+            "4. **Verify** — Read files back and/or run tests to confirm correctness.",
+            "5. **Summarize** — End with a clear summary of what you changed and why.",
             "",
             "## Rules",
-            "- Always read files before editing them to understand their current content.",
-            "- Use `tree` or `list_files` to understand project structure before making changes.",
-            "- Use `search_code` to find relevant code across the indexed codebase.",
-            "- Use `edit_file` for surgical changes (provide exact text to match).",
-            "- Use `write_file` only for new files or complete rewrites.",
-            "- Use `run_shell` for running tests, lints, or build commands.",
-            "- After making changes, verify them (read the file back, run tests).",
-            "- Explain what you're doing and why as you work.",
-            "- When finished, provide a summary of all changes made.",
+            "- NEVER guess at file contents. Always read_file first.",
+            "- For edit_file, copy the exact text from read_file output for old_text.",
+            "- Prefer small, targeted edit_file calls over full write_file rewrites.",
+            "- If a tool returns an error, adapt your approach — don't retry blindly.",
+            "- Be concise in explanations. The developer is experienced.",
             "",
             "## Project structure",
             tree_text[:3000],

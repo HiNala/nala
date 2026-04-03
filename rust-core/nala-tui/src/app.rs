@@ -182,6 +182,10 @@ pub enum BackgroundEvent {
         checkpoint_count: usize,
         notification_priority: String,
     },
+    AgentSuggestion {
+        objective: String,
+        text: String,
+    },
 }
 
 // ── App ────────────────────────────────────────────────────────────────────
@@ -243,6 +247,8 @@ pub struct App {
     pub agent_choices: Vec<String>,
     pub agent_checkpoint_count: usize,
     pub agent_notification_priority: String,
+    // ── Agent suggestion (auto-detect actionable queries) ──
+    pub pending_agent_suggestion: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -391,6 +397,7 @@ impl App {
             agent_choices: Vec::new(),
             agent_checkpoint_count: 0,
             agent_notification_priority: "quiet".to_string(),
+            pending_agent_suggestion: None,
         })
     }
 
@@ -734,6 +741,25 @@ impl App {
     }
 
     fn dispatch_command(&mut self, input: String) {
+        // Check for pending agent suggestion (y/n response)
+        if let Some(objective) = self.pending_agent_suggestion.take() {
+            let lower = input.trim().to_lowercase();
+            if lower == "y" || lower == "yes" {
+                self.push_message(Message::system("Launching agent..."));
+                self.launch_agent(objective);
+                return;
+            }
+            // "n", "no", or anything else — send as regular query (skip suggestion)
+            if lower == "n" || lower == "no" {
+                self.push_message(Message::system(
+                    "Skipped. Answering with context only.",
+                ));
+                self.send_llm_query_skip_suggest(objective);
+                return;
+            }
+            // User typed something else entirely — process it as a new command
+        }
+
         if input.starts_with('/') {
             self.handle_slash_command(&input);
         } else {
@@ -1072,6 +1098,16 @@ impl App {
                 } else if !self.agent_panel_open {
                     self.agent_panel_open = true;
                 }
+            }
+            BackgroundEvent::AgentSuggestion { objective, text } => {
+                self.mode = AppMode::Ready;
+                if let Some(partial) = self.streaming_response.take() {
+                    if !partial.is_empty() {
+                        self.push_message(Message::assistant(partial));
+                    }
+                }
+                self.pending_agent_suggestion = Some(objective);
+                self.push_message(Message::system(text));
             }
         }
     }

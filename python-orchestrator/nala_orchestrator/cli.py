@@ -133,6 +133,44 @@ VERSION = "0.1.0"
 
 _write_lock = threading.Lock()
 
+# ── Intent detection ──────────────────────────────────────────────────────
+
+_ACTION_VERBS = frozenset({
+    "refactor", "create", "fix", "add", "implement", "write", "modify",
+    "update", "delete", "remove", "change", "rename", "move", "optimize",
+    "debug", "build", "migrate", "convert", "generate", "scaffold",
+    "setup", "configure", "install", "upgrade", "replace", "rewrite",
+    "extract", "merge", "split", "clean", "reorganize", "restructure",
+    "patch", "repair", "improve", "simplify", "wrap", "unwrap",
+})
+_QUESTION_STARTS = frozenset({
+    "what", "where", "when", "who", "why", "how", "is", "are", "do",
+    "does", "can", "could", "would", "should", "which", "tell", "show",
+    "explain", "describe", "summarize", "list",
+})
+
+
+def _is_actionable_query(text: str) -> bool:
+    """Heuristic: does this query look like a task the agent should handle?"""
+    words = text.lower().split()
+    if not words:
+        return False
+    first = words[0].rstrip(".,!?:;")
+    if first in _QUESTION_STARTS:
+        return False
+    if first in _ACTION_VERBS:
+        return True
+    if any(w in _ACTION_VERBS for w in words[:4]):
+        return True
+    imperative_phrases = [
+        "please fix", "please add", "please create", "please update",
+        "go ahead", "make it", "make the", "make sure",
+        "i need you to", "i want you to", "can you fix",
+        "can you create", "can you add", "can you write",
+    ]
+    lower = text.lower()
+    return any(p in lower for p in imperative_phrases)
+
 
 def write_response(data: dict) -> None:
     """Write a JSON-lines response to stdout (thread-safe)."""
@@ -537,6 +575,27 @@ async def handle_request(
         if not text:
             write_response({"id": req_id, "type": "error", "text": "Empty query"})
             return
+
+        skip_suggest = req.get("skip_suggest", False)
+        if (
+            not skip_suggest
+            and _agent_manager is not None
+            and config.has_llm()
+            and _is_actionable_query(text)
+        ):
+            write_response({
+                "id": req_id,
+                "type": "suggest_agent",
+                "objective": text,
+                "text": (
+                    "This looks like a coding task that could benefit from the "
+                    "agent (file read/write, search, shell). "
+                    "**Launch agent? (y / n)**"
+                ),
+            })
+            write_response({"id": req_id, "type": "done"})
+            return
+
         import time as _time
         _t0 = _time.monotonic()
         log.warning("QUERY START id=%s text=%r", req_id, text[:60])
