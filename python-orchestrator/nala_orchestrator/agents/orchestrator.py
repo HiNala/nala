@@ -191,69 +191,114 @@ class AgentOrchestrator:
 
     # ── File tree ──────────────────────────────────────────────────────────
 
-    def _build_file_tree(self, max_lines: int = 80) -> str:
-        """Build a compact directory tree for the system prompt."""
+    def _build_file_tree(self, max_lines: int = 120) -> str:
+        """Build a compact directory tree for the system prompt.
+
+        Root-level files are listed first (README, configs, etc.) so the AI
+        always knows about them. Then directories are expanded up to depth 2.
+        """
         root = Path(self.context.project_root)
         if not root.is_dir():
             return "(project root not found)"
 
-        skip = {
+        skip_dirs = {
             ".git", "node_modules", "__pycache__", ".nala", "target",
             "dist", "build", ".next", ".venv", "venv", ".mypy_cache",
             ".ruff_cache", ".pytest_cache", "egg-info",
         }
+        try:
+            entries = sorted(root.iterdir(), key=lambda e: e.name.lower())
+        except PermissionError:
+            return "(permission denied)"
+
+        root_files = [
+            e for e in entries
+            if e.is_file() and not e.name.startswith(".")
+        ]
+        root_dirs = [
+            e for e in entries
+            if e.is_dir() and e.name not in skip_dirs and not e.name.startswith(".")
+        ]
+
         lines: list[str] = []
+
+        # Root-level files first — always visible to the AI
+        all_root_items = root_files + root_dirs
+        for i, f in enumerate(root_files):
+            connector = "└── " if i == len(all_root_items) - 1 else "├── "
+            lines.append(f"{connector}{f.name}")
 
         def _walk(p: Path, prefix: str, depth: int) -> None:
             if len(lines) >= max_lines:
                 return
             try:
-                entries = sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+                children = sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
             except PermissionError:
                 return
             dirs = [
-                e for e in entries
-                if e.is_dir() and e.name not in skip and not e.name.startswith(".")
+                e for e in children
+                if e.is_dir() and e.name not in skip_dirs and not e.name.startswith(".")
             ]
             files = [
-                e for e in entries
+                e for e in children
                 if e.is_file() and not e.name.startswith(".")
             ]
             items = dirs + files
-            for i, entry in enumerate(items):
+            for j, entry in enumerate(items):
                 if len(lines) >= max_lines:
                     lines.append(f"{prefix}...")
                     return
-                connector = "└── " if i == len(items) - 1 else "├── "
+                connector = "└── " if j == len(items) - 1 else "├── "
                 lines.append(f"{prefix}{connector}{entry.name}{'/' if entry.is_dir() else ''}")
-                if entry.is_dir() and depth < 3:
-                    extension = "    " if i == len(items) - 1 else "│   "
+                if entry.is_dir() and depth < 2:
+                    extension = "    " if j == len(items) - 1 else "│   "
                     _walk(entry, prefix + extension, depth + 1)
 
-        _walk(root, "", 0)
+        # Directories after root files
+        for i, d in enumerate(root_dirs):
+            is_last = (i == len(root_dirs) - 1)
+            connector = "└── " if is_last else "├── "
+            lines.append(f"{connector}{d.name}/")
+            extension = "    " if is_last else "│   "
+            _walk(d, extension, 1)
+
         return "\n".join(lines) if lines else "(empty project)"
 
     # ── Project brief ─────────────────────────────────────────────────────
 
     def _load_project_brief(self) -> str:
-        """Load a short project description from README or .nala/agent/project-brief.md."""
+        """Load project description from brief + README for AI grounding.
+
+        Priority: project-brief.md (if it has real content) + README.md.
+        Both are included when available since they serve different purposes.
+        """
         root = Path(self.context.project_root)
+        parts: list[str] = []
+
+        # Project brief — only use if it has substantive content
         brief_path = root / ".nala" / "agent" / "project-brief.md"
         if brief_path.exists():
             try:
-                text = brief_path.read_text(encoding="utf-8", errors="replace")[:3000]
-                return f"## Project brief\n{text.strip()}"
+                text = brief_path.read_text(encoding="utf-8", errors="replace").strip()
+                # Skip if it's just the default template (< 400 chars of boilerplate)
+                if len(text) > 400 and "Fill in" not in text:
+                    parts.append(f"## Project brief\n{text[:3000]}")
             except Exception:
                 pass
+
+        # README — always include if present (primary project documentation)
         for name in ("README.md", "readme.md", "README.rst", "README.txt", "README"):
             readme = root / name
             if readme.exists():
                 try:
-                    text = readme.read_text(encoding="utf-8", errors="replace")[:4000]
-                    return f"## From README\n{text.strip()}"
+                    text = readme.read_text(encoding="utf-8", errors="replace").strip()
+                    if text:
+                        parts.append(f"## README ({name})\n{text[:5000]}")
+                    break
                 except Exception:
                     pass
-        return ""
+
+        return "\n\n".join(parts)
 
     # ── Retrieval ──────────────────────────────────────────────────────────
 

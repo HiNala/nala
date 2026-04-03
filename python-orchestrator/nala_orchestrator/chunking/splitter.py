@@ -166,7 +166,7 @@ class ChunkSplitter:
         project_root: str,
         symbols: list[Symbol],
     ) -> list[Chunk]:
-        """Chunk all source files in the project."""
+        """Chunk all source files in the project, plus key documentation files."""
         root = Path(project_root)
 
         by_file: dict[str, list[Symbol]] = {}
@@ -183,7 +183,42 @@ class ChunkSplitter:
                 source_lines=self._read_lines(abs_path),
             ))
 
+        # Include key project files that have no symbols (docs, config, etc.)
+        all_chunks.extend(self._chunk_key_files(root, set(by_file.keys())))
+
         return all_chunks
+
+    def _chunk_key_files(self, root: Path, already_chunked: set[str]) -> list[Chunk]:
+        """Chunk important non-code files (README, configs, docs) as documents."""
+        key_patterns = [
+            "README.md", "README.rst", "README.txt", "README",
+            "ROADMAP.md", "CHANGELOG.md", "CONTRIBUTING.md",
+            "Cargo.toml", "pyproject.toml", "package.json",
+            ".env.example", "Makefile", "docker-compose.yml",
+            "Dockerfile",
+        ]
+        chunks: list[Chunk] = []
+        for pattern in key_patterns:
+            path = root / pattern
+            if not path.exists():
+                continue
+            rel = str(path.relative_to(root)).replace("\\", "/")
+            if rel in already_chunked:
+                continue
+            lines = self._read_lines(path)
+            if not lines:
+                continue
+            lang = _detect_language(rel)
+            total = len(lines)
+            # Chunk as a single document (or split if very long)
+            pos = 1
+            while pos <= total:
+                end = min(pos + MAX_CHUNK_LINES - 1, total)
+                chunks.append(self._make_chunk(
+                    rel, pos, end, lines, lang, "document", pattern,
+                ))
+                pos = end + 1
+        return chunks
 
     @staticmethod
     def _read_lines(path: Path) -> list[str] | None:
