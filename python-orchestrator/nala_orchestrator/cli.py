@@ -651,15 +651,21 @@ async def handle_request(
             write_response({"id": req_id, "type": "error", "text": "Empty query"})
             return
 
+        # Agent-suggestion check: purely local heuristic, zero latency.
+        # Semantic (LLM-based) classification was removed from the hot path
+        # because it serialises two API calls and causes "ANALYZING" hangs.
         skip_suggest = req.get("skip_suggest", False)
-        suggest_enabled = os.environ.get("NALA_AGENT_SUGGEST", "1").strip().lower() not in {"0", "false", "no", "off"}
-        should_suggest = False
-        suggest_reason = ""
-        if suggest_enabled and not skip_suggest and _agent_manager is not None and config.has_llm():
-            should_suggest, suggest_reason = await _is_actionable_query_semantic(agent, text)
-
-        if should_suggest:
-            log.info("agent suggest=yes reason=%s text=%r", suggest_reason, text[:80])
+        suggest_enabled = os.environ.get("NALA_AGENT_SUGGEST", "1").strip().lower() not in {
+            "0", "false", "no", "off",
+        }
+        if (
+            suggest_enabled
+            and not skip_suggest
+            and _agent_manager is not None
+            and config.has_llm()
+            and _is_actionable_query_fallback(text)
+        ):
+            log.info("agent suggest (heuristic) text=%r", text[:80])
             write_response({
                 "id": req_id,
                 "type": "suggest_agent",
