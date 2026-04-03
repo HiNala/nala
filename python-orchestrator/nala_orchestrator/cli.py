@@ -1389,6 +1389,86 @@ async def handle_request(
             else:
                 _stream_text(req_id, "No mission plan active. Use `/agent objective <goal>` to start.")
 
+    # ── Settings (P7-03) ─────────────────────────────────────────────
+
+    elif req_type == "settings_show":
+        try:
+            from .settings.loader import SettingsLoader
+            loader = SettingsLoader(root)
+            settings = loader.load()
+            _stream_text(req_id, settings.format_summary())
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Settings error: {e}"})
+
+    elif req_type == "settings_set":
+        key = req.get("key", "").strip()
+        value = req.get("value", "").strip()
+        if not key or not value:
+            write_response({"id": req_id, "type": "error", "text": "Usage: /settings set <key> <value>"})
+            return
+        try:
+            from .settings.loader import SettingsLoader
+            from .settings.writer import SettingsWriter
+            loader = SettingsLoader(root)
+            settings = loader.load()
+            writer = SettingsWriter(loader.project_path)
+            msg = writer.set_value(key, value, settings)
+            _stream_text(req_id, msg)
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Settings error: {e}"})
+
+    elif req_type == "settings_setup":
+        try:
+            from .settings.loader import SettingsLoader
+            from .settings.writer import SettingsWriter
+            loader = SettingsLoader(root)
+            settings = loader.load()
+
+            # Gather current state for the setup wizard
+            has_anthropic = bool(settings.keys.anthropic_api_key)
+            has_openai = bool(settings.keys.openai_api_key)
+            has_google = bool(settings.keys.google_api_key)
+
+            lines = ["## Nala Settings Setup\n"]
+            lines.append("Current configuration:\n")
+            lines.append(f"  Anthropic key: {'configured' if has_anthropic else 'missing'}")
+            lines.append(f"  OpenAI key:    {'configured' if has_openai else 'missing'}")
+            lines.append(f"  Google key:    {'configured' if has_google else 'missing'}")
+            lines.append(f"  Provider:      {settings.models.default_provider}")
+            lines.append(f"  Model:         {settings.models.default_model}")
+            lines.append(f"  Autonomy:      {settings.agent.autonomy}")
+            lines.append("")
+
+            if not any([has_anthropic, has_openai, has_google]):
+                lines.append("**No API keys configured.** To get started:\n")
+                lines.append("  `/settings set keys.anthropic_api_key sk-ant-...`")
+                lines.append("  `/settings set keys.openai_api_key sk-...`")
+                lines.append("  `/settings set keys.google_api_key AIza...`")
+            else:
+                lines.append("**To change settings:**\n")
+                lines.append("  `/settings set models.default_provider openai`")
+                lines.append("  `/settings set models.default_model gpt-4o`")
+                lines.append("  `/settings set models.routing.plan anthropic/claude-opus-4-6`")
+                lines.append("  `/settings set agent.autonomy autonomous`")
+                lines.append("  `/settings set agent.git.auto_branch true`")
+
+            lines.append("")
+            lines.append(f"Settings file: `{loader.project_path}`")
+
+            if not loader.has_project_settings():
+                writer = SettingsWriter(loader.project_path)
+                writer.write(settings)
+                lines.append("\nCreated default settings file.")
+
+            _stream_text(req_id, "\n".join(lines))
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Settings error: {e}"})
+
+    elif req_type == "settings_path":
+        from .settings.loader import SettingsLoader
+        loader = SettingsLoader(root)
+        _stream_text(req_id, str(loader.project_path))
+
     # ── Models registry (P7-01) ──────────────────────────────────────
 
     elif req_type == "models_list":

@@ -1145,7 +1145,13 @@ pub const SLASH_COMMANDS: &[&str] = &[
     "/session load",
     "/context",
     "/compact",
+    "/agent objective",
+    "/agent missions",
+    "/agent approve-missions",
     // ── Settings ──
+    "/settings",
+    "/settings set",
+    "/settings setup",
     "/model",
     "/models",
     "/models refresh",

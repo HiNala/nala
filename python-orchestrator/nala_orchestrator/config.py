@@ -78,13 +78,15 @@ class Config(BaseModel):
 
     @classmethod
     def load(cls, project_root: Path | None = None) -> Config:
-        """Load configuration from environment and .env files.
+        """Load configuration from settings.toml, .env, and environment.
 
         Precedence (highest wins):
           1. Environment variables already set in the process
           2. Project-root .env file
-          3. Home directory ~/.nala/.env
-          4. Built-in defaults
+          3. `.nala/settings.toml` (project-level)
+          4. `~/.nala/settings.toml` (global)
+          5. Home directory ~/.nala/.env
+          6. Built-in defaults
         """
         root = project_root or Path.cwd()
 
@@ -92,8 +94,6 @@ class Config(BaseModel):
 
         if home_env.exists():
             load_dotenv(home_env, override=False)
-        # Walk upward from project_root so launching from a subdirectory
-        # (for example `rust-core`) still picks up repo-level `.env`.
         candidate_envs: list[Path] = []
         cursor = root.resolve()
         while True:
@@ -107,6 +107,15 @@ class Config(BaseModel):
         for env_path in reversed(candidate_envs):
             load_dotenv(env_path, override=True)
 
+        # Load structured settings from .nala/settings.toml
+        from .settings.loader import SettingsLoader
+        settings_loader = SettingsLoader(root)
+        nala_settings = settings_loader.load()
+        s = nala_settings
+
+        def _env(key: str, fallback: str = "") -> str:
+            return os.environ.get(key) or fallback
+
         def _int(key: str, default: int) -> int:
             raw = os.environ.get(key)
             if raw is None:
@@ -116,26 +125,47 @@ class Config(BaseModel):
             except ValueError:
                 return default
 
-        overrides: dict[str, tuple[str, str]] = {}
+        provider = _env("LLM_PROVIDER", s.models.default_provider) or "anthropic"
+
+        # Model routing: merge settings.toml routing + ROUTE_* env vars
+        overrides = s.models.routing.as_overrides()
         for task in ("plan", "code", "explore", "research", "design", "review", "summarize"):
             val = os.environ.get(f"ROUTE_{task.upper()}", "")
             if ":" in val:
                 prov, model = val.split(":", 1)
                 overrides[task] = (prov.strip(), model.strip())
 
+        # API keys: env vars win, then settings.toml, then None
+        anthropic_key = _env("ANTHROPIC_API_KEY", s.keys.anthropic_api_key) or None
+        openai_key = _env("OPENAI_API_KEY", s.keys.openai_api_key) or None
+        google_key = _env("GOOGLE_API_KEY", s.keys.google_api_key) or None
+
+        # Default models: env vars win, then settings.toml default
+        default_model = s.models.default_model
+        provider_model_defaults = {
+            "anthropic": ("ANTHROPIC_MODEL", default_model if provider == "anthropic" else "claude-sonnet-4-6"),
+            "openai": ("OPENAI_MODEL", default_model if provider == "openai" else "gpt-4o"),
+            "google": ("GOOGLE_MODEL", default_model if provider == "google" else "gemini-2.0-flash"),
+            "ollama": ("OLLAMA_MODEL", default_model if provider == "ollama" else "codellama:13b"),
+        }
+
+        def _model(prov: str) -> str:
+            env_key, fallback = provider_model_defaults.get(prov, ("", "unknown"))
+            return _env(env_key, fallback)
+
         return cls(
-            llm_provider=os.environ.get("LLM_PROVIDER", "anthropic"),  # type: ignore[arg-type]
-            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
-            openai_api_key=os.environ.get("OPENAI_API_KEY"),
-            google_api_key=os.environ.get("GOOGLE_API_KEY"),
-            ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-            ollama_model=os.environ.get("OLLAMA_MODEL", "codellama:13b"),
-            anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-            openai_model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
-            google_model=os.environ.get("GOOGLE_MODEL", "gemini-2.0-flash"),
+            llm_provider=provider,  # type: ignore[arg-type]
+            anthropic_api_key=anthropic_key,
+            openai_api_key=openai_key,
+            google_api_key=google_key,
+            ollama_base_url=_env("OLLAMA_BASE_URL", s.keys.ollama_base_url),
+            ollama_model=_model("ollama"),
+            anthropic_model=_model("anthropic"),
+            openai_model=_model("openai"),
+            google_model=_model("google"),
             model_overrides=overrides,
-            neo4j_uri=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
-            neo4j_user=os.environ.get("NEO4J_USER", "neo4j"),
+            neo4j_uri=_env("NEO4J_URI", "bolt://localhost:7687"),
+            neo4j_user=_env("NEO4J_USER", "neo4j"),
             neo4j_password=os.environ.get("NEO4J_PASSWORD"),
             neo4j_enabled=os.environ.get("NEO4J_ENABLED", "false").lower() == "true",
             project_root=root,

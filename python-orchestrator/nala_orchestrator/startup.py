@@ -93,6 +93,21 @@ def _suggest_actions(
     """Generate 3–5 contextual suggestions based on repo state."""
     suggestions: list[str] = []
 
+    # Check if settings are configured
+    settings_path = root / ".nala" / "settings.toml"
+    has_settings = settings_path.exists()
+
+    # Check for API keys
+    import os
+    has_any_key = bool(
+        os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+    )
+
+    if not has_any_key and not has_settings:
+        suggestions.append("/settings setup — configure API keys and preferences")
+
     if file_count > 0 and symbol_count > 0:
         suggestions.append("/agent hotspot — find high-value improvement targets")
 

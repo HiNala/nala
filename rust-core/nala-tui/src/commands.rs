@@ -53,18 +53,11 @@ impl App {
                          **Provider:** {}\n\
                          **Model:** {}\n\
                          **Status:** {}\n\n\
-                         To change, edit your `.env` file:\n\
-                         ```\n\
-                         LLM_PROVIDER=openai        # or: anthropic, google, ollama\n\
-                         OPENAI_API_KEY=sk-...       # your API key\n\
-                         OPENAI_MODEL=gpt-4o         # optional model override\n\
-                         ```\n\n\
-                         Supported providers:\n\
-                         - `anthropic` — Claude (default model: claude-sonnet-4-6)\n\
-                         - `openai` — GPT-4o, o1, etc.\n\
-                         - `google` — Gemini\n\
-                         - `ollama` — Local models (no API key needed)\n\n\
-                         Restart Nala after changing `.env`.",
+                         To change, use `/settings`:\n\
+                         - `/settings set models.default_provider openai`\n\
+                         - `/settings set keys.openai_api_key sk-...`\n\
+                         - `/settings setup` — guided configuration\n\n\
+                         Or edit `.env` / `.nala/settings.toml` directly.",
                         provider, model, avail,
                     )));
                 } else {
@@ -103,6 +96,10 @@ impl App {
                         });
                     }
                 }
+            }
+            "/settings" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.handle_settings_command(args);
             }
             "/scope" => {
                 let args = parts.get(1).copied().unwrap_or("").trim().to_string();
@@ -236,9 +233,11 @@ impl App {
             "  /context               — context window usage\n",
             "  /compact               — free tokens by compacting\n\n",
             "### Settings\n",
+            "  /settings              — show all configuration\n",
+            "  /settings set <k> <v>  — change a setting\n",
+            "  /settings setup        — guided first-run wizard\n",
             "  /model                 — show current LLM provider/model\n",
             "  /models                — show all available models + routing\n",
-            "  /models refresh        — re-probe provider API keys\n",
             "  /doctor                — environment diagnostics\n\n",
             "### General\n",
             "  /scan / /index         — rescan or reindex project files\n",
@@ -1067,6 +1066,89 @@ impl App {
                 let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
             }
         });
+    }
+
+    fn handle_settings_command(&mut self, args: &str) {
+        let mut parts = args.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+
+        match sub {
+            "" | "show" => {
+                self.push_message(Message::system("Loading settings..."));
+                let Some(bridge) = self.python_bridge.clone() else {
+                    self.push_message(Message::system("AI bridge not ready."));
+                    return;
+                };
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.settings_show().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+            "set" => {
+                let mut set_parts = rest.splitn(2, ' ');
+                let key = set_parts.next().unwrap_or("").trim().to_string();
+                let value = set_parts.next().unwrap_or("").trim().to_string();
+                if key.is_empty() || value.is_empty() {
+                    self.push_message(Message::error(
+                        "Usage: /settings set <key> <value>\n\
+                         Examples:\n\
+                         - /settings set keys.anthropic_api_key sk-ant-...\n\
+                         - /settings set models.default_provider openai\n\
+                         - /settings set models.routing.plan anthropic/claude-opus-4-6\n\
+                         - /settings set agent.autonomy autonomous",
+                    ));
+                    return;
+                }
+                self.push_message(Message::system(format!("Setting {} = {}...", key, value)));
+                let Some(bridge) = self.python_bridge.clone() else {
+                    self.push_message(Message::system("AI bridge not ready."));
+                    return;
+                };
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.settings_set(key, value).await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+            "setup" => {
+                self.push_message(Message::system("Running settings setup..."));
+                let Some(bridge) = self.python_bridge.clone() else {
+                    self.push_message(Message::system("AI bridge not ready."));
+                    return;
+                };
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.settings_setup().await {
+                        let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+                    }
+                });
+            }
+            "help" => {
+                self.push_message(Message::assistant(
+                    "## /settings — Configuration\n\n\
+                     - `/settings` — show current configuration\n\
+                     - `/settings set <key> <value>` — change a setting\n\
+                     - `/settings setup` — guided first-run wizard\n\n\
+                     **Common keys:**\n\
+                     - `keys.anthropic_api_key` / `keys.openai_api_key` / `keys.google_api_key`\n\
+                     - `models.default_provider` / `models.default_model`\n\
+                     - `models.routing.plan` / `code` / `explore` / `research`\n\
+                     - `agent.autonomy` — manual, guided, autonomous\n\
+                     - `agent.git.auto_branch` / `agent.git.auto_commit`\n\n\
+                     Settings are saved to `.nala/settings.toml`.\n\
+                     Environment variables (`.env`) always take precedence.",
+                ));
+            }
+            _ => {
+                self.push_message(Message::error(
+                    "Usage: /settings [show|set|setup|help]",
+                ));
+            }
+        }
     }
 
     fn handle_agent_command(&mut self, args: &str) {

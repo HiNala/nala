@@ -155,6 +155,10 @@ pub enum BridgeRequest {
     AgentObjective { objective: String, autonomy: String },
     AgentApproveMissions { approved: bool },
     AgentMissionsStatus,
+    // ── Settings (P7-03) ──────────────────────────────────────────
+    SettingsShow,
+    SettingsSet { key: String, value: String },
+    SettingsSetup,
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -581,6 +585,21 @@ impl PythonBridge {
 
     pub async fn agent_missions_status(&self) -> Result<()> {
         self.request_tx.send(BridgeRequest::AgentMissionsStatus).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn settings_show(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::SettingsShow).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn settings_set(&self, key: String, value: String) -> Result<()> {
+        self.request_tx.send(BridgeRequest::SettingsSet { key, value }).await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn settings_setup(&self) -> Result<()> {
+        self.request_tx.send(BridgeRequest::SettingsSetup).await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
 
@@ -1028,6 +1047,20 @@ async fn bridge_task(
                             BridgeRequest::AgentMissionsStatus => json!({
                                 "id": id,
                                 "type": "agent_missions_status",
+                            }),
+                            BridgeRequest::SettingsShow => json!({
+                                "id": id,
+                                "type": "settings_show",
+                            }),
+                            BridgeRequest::SettingsSet { key, value } => json!({
+                                "id": id,
+                                "type": "settings_set",
+                                "key": key,
+                                "value": value,
+                            }),
+                            BridgeRequest::SettingsSetup => json!({
+                                "id": id,
+                                "type": "settings_setup",
                             }),
                         };
                         if let Err(e) = send_line(&mut stdin, &msg).await {
