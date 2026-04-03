@@ -89,7 +89,6 @@ class Config(BaseModel):
           6. Built-in defaults
         """
         root = project_root or Path.cwd()
-        explicit_provider_env = os.environ.get("LLM_PROVIDER", "").strip().lower()
 
         home_env = Path.home() / ".nala" / ".env"
 
@@ -131,17 +130,6 @@ class Config(BaseModel):
         openai_key = _env("OPENAI_API_KEY", s.keys.openai_api_key) or None
         google_key = _env("GOOGLE_API_KEY", s.keys.google_api_key) or None
 
-        # Provider selection starts from settings, then considers env override.
-        provider_env = os.environ.get("LLM_PROVIDER", "").strip().lower()
-        provider = (s.models.default_provider or "").strip().lower() or "anthropic"
-        if provider not in {"anthropic", "openai", "google", "ollama"}:
-            provider = "anthropic"
-        # If no project settings exist, allow env provider override.
-        # When project settings are present, settings are authoritative and
-        # env provider is treated as advisory only.
-        if provider_env in {"anthropic", "openai", "google", "ollama"} and not settings_loader.has_project_settings():
-            provider = provider_env
-
         def _provider_has_key(prov: str) -> bool:
             if prov == "anthropic":
                 return bool(anthropic_key)
@@ -153,30 +141,27 @@ class Config(BaseModel):
                 return True
             return False
 
-        # If the chosen provider has no key but another provider does, we
-        # auto-switch only for implicit/default configurations. For explicit
-        # project settings, keep the user-chosen provider.
-        using_default_project_provider = (
-            settings_loader.has_project_settings()
-            and (s.models.default_provider or "").strip().lower() == "anthropic"
-            and (s.models.default_model or "").strip() == "claude-sonnet-4-6"
-        )
-        should_autoswitch = (
-            not explicit_provider_env
-            and (
-                not settings_loader.has_project_settings()
-                or using_default_project_provider
-            )
-        )
-        if should_autoswitch and not _provider_has_key(provider):
-            if openai_key:
-                provider = "openai"
-            elif anthropic_key:
-                provider = "anthropic"
-            elif google_key:
-                provider = "google"
-            elif provider == "ollama":
-                provider = "ollama"
+        # Provider selection — env var LLM_PROVIDER always wins, then settings.toml.
+        provider_env = os.environ.get("LLM_PROVIDER", "").strip().lower()
+        settings_provider = (s.models.default_provider or "").strip().lower()
+        provider_explicit = False
+
+        if provider_env in {"anthropic", "openai", "google", "ollama"}:
+            provider = provider_env
+            provider_explicit = True
+        elif settings_provider in {"anthropic", "openai", "google", "ollama"}:
+            provider = settings_provider
+            provider_explicit = True
+        else:
+            provider = "anthropic"
+
+        # Auto-switch only when no explicit provider was chosen by the user
+        # (i.e. falling back to the built-in "anthropic" default).
+        if not provider_explicit and not _provider_has_key(provider):
+            for candidate in ("openai", "anthropic", "google", "ollama"):
+                if _provider_has_key(candidate):
+                    provider = candidate
+                    break
 
         # Model routing: merge settings.toml routing + ROUTE_* env vars
         overrides = s.models.routing.as_overrides()
@@ -206,14 +191,10 @@ class Config(BaseModel):
             env_val = os.environ.get(env_key) if env_key else None
             if env_val:
                 return env_val
-            # settings.toml default_model only applies when settings explicitly
-            # target this provider; prevents cross-provider model bleed.
-            if (
-                prov == provider
-                and settings_loader.has_any_settings()
-                and s.models.default_model
-                and (s.models.default_provider or "").strip().lower() == prov
-            ):
+            # settings.toml default_model only applies when the settings
+            # explicitly target this same provider.
+            settings_prov = (s.models.default_provider or "").strip().lower()
+            if prov == settings_prov and s.models.default_model:
                 return s.models.default_model
             return _PROVIDER_MODEL_DEFAULTS.get(prov, "unknown")
 

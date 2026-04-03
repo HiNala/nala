@@ -109,8 +109,8 @@ def _parse_settings(raw: dict) -> NalaSettings:
         summarize=routing_raw.get("summarize", ""),
     )
     models = ModelsSettings(
-        default_provider=models_raw.get("default_provider", "anthropic"),
-        default_model=models_raw.get("default_model", "claude-sonnet-4-6"),
+        default_provider=models_raw.get("default_provider", ""),
+        default_model=models_raw.get("default_model", ""),
         routing=routing,
     )
 

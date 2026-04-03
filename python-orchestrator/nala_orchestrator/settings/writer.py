@@ -91,8 +91,16 @@ def _serialize_toml(settings: NalaSettings) -> str:
 
     lines.append("")
     lines.append("[models]")
-    lines.append(f'default_provider = "{settings.models.default_provider}"')
-    lines.append(f'default_model = "{settings.models.default_model}"')
+    prov = settings.models.default_provider
+    mdl = settings.models.default_model
+    if prov and prov != "anthropic":
+        lines.append(f'default_provider = "{prov}"')
+    else:
+        lines.append('# default_provider = ""  # auto-detected from your API keys / LLM_PROVIDER env var')
+    if mdl and mdl != "claude-sonnet-4-6":
+        lines.append(f'default_model = "{mdl}"')
+    else:
+        lines.append('# default_model = ""  # uses provider default (gpt-4o, claude-sonnet-4-6, etc.)')
 
     lines.append("")
     lines.append("[models.routing]")

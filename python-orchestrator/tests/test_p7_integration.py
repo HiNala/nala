@@ -24,8 +24,8 @@ def test_settings_schema_defaults():
 
     s = NalaSettings()
     assert s.keys.anthropic_api_key == ""
-    assert s.models.default_provider == "anthropic"
-    assert s.models.default_model == "claude-sonnet-4-6"
+    assert s.models.default_provider == ""
+    assert s.models.default_model == ""
     assert s.agent.autonomy == "guided"
     assert s.agent.max_workers == 3
     assert s.agent.git.auto_branch is True

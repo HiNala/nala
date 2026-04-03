@@ -41,8 +41,8 @@ class ModelRoutingSettings:
 
 @dataclass
 class ModelsSettings:
-    default_provider: str = "anthropic"
-    default_model: str = "claude-sonnet-4-6"
+    default_provider: str = ""
+    default_model: str = ""
     routing: ModelRoutingSettings = field(default_factory=ModelRoutingSettings)
 
 
@@ -103,8 +103,10 @@ class NalaSettings:
             lines.append(f"  [{icon}] {name}: {status}{extra}")
 
         lines.append("\n## Default Model\n")
-        lines.append(f"  Provider: {self.models.default_provider}")
-        lines.append(f"  Model:    {self.models.default_model}")
+        prov_display = self.models.default_provider or "(auto-detect from keys)"
+        model_display = self.models.default_model or "(provider default)"
+        lines.append(f"  Provider: {prov_display}")
+        lines.append(f"  Model:    {model_display}")
 
         lines.append("\n## Model Routing\n")
         routing = self.models.routing
