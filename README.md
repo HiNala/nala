@@ -154,9 +154,11 @@ Just type a question or instruction to chat with the AI. All slash commands:
 
 | Command | Description |
 |---------|-------------|
+| `/settings` | Show all configuration (keys, routing, agent defaults) |
+| `/settings set <key> <value>` | Change a setting (persists to `.nala/settings.toml`) |
+| `/settings setup` | Guided first-run configuration wizard |
 | `/model` | Show current LLM provider/model |
 | `/models` | Show all available models + routing table |
-| `/models refresh` | Re-probe provider API keys |
 | `/doctor` | Environment diagnostics |
 
 **General:**
@@ -255,7 +257,8 @@ nala/
 │   └── nala-bridge/        PyO3 bindings (Rust → Python)
 ├── python-orchestrator/    Python package
 │   └── nala_orchestrator/
-│       ├── config.py       Configuration (loads from .env)
+│       ├── config.py       Configuration (loads from .env + settings.toml)
+│       ├── settings/       Settings system (.nala/settings.toml)
 │       ├── llm/            LLM providers (Anthropic, OpenAI, Google, Ollama)
 │       ├── chunking/       Code chunk splitter, BM25/vector embedder, context assembler
 │       ├── context/        Token counting, compaction, background summaries
@@ -289,11 +292,37 @@ Nala supports four providers. Set `LLM_PROVIDER` in `.env`:
 | `google` | `GOOGLE_API_KEY` | gemini-2.0-flash |
 | `ollama` | *(none)* | codellama:13b |
 
+### Settings File
+
+Nala's canonical configuration file is `.nala/settings.toml`. Use `/settings setup` to create it interactively, or `/settings set <key> <value>` to change individual settings. Environment variables (`.env`) always take precedence.
+
+```toml
+[keys]
+anthropic_api_key = "sk-ant-..."
+
+[models]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-6"
+
+[models.routing]
+plan = "anthropic/claude-opus-4-6"
+code = "anthropic/claude-sonnet-4-6"
+explore = "anthropic/claude-haiku-4-5"
+
+[agent]
+autonomy = "guided"
+max_workers = 3
+
+[agent.git]
+auto_branch = true
+auto_commit = true
+```
+
 ### Multi-Model Routing
 
 When multiple API keys are configured, Nala can route different task types to different models. Use `/models` to see the routing table and available models.
 
-Per-task overrides in `.env`:
+Configure routing in `.nala/settings.toml` (preferred) or via `.env`:
 
 ```bash
 ROUTE_PLAN=anthropic:claude-opus-4-6      # planning uses flagship

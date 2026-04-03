@@ -188,14 +188,14 @@ Update `python-orchestrator/nala_orchestrator/startup.py` so startup intelligenc
 
 ## Acceptance Criteria
 
-- [ ] `.nala/settings.toml` is the canonical configuration file
-- [ ] `/settings` shows a complete, readable summary of current configuration
-- [ ] `/settings set` allows inline changes that persist
-- [ ] `/settings setup` provides a guided first-run wizard
-- [ ] Model routing preferences are respected by the orchestrator and workers
-- [ ] Missing keys produce helpful suggestions, not crashes
-- [ ] Project-level settings override global settings
-- [ ] API keys from `.env` still work and take precedence
+- [x] `.nala/settings.toml` is the canonical configuration file
+- [x] `/settings` shows a complete, readable summary of current configuration
+- [x] `/settings set` allows inline changes that persist
+- [x] `/settings setup` provides a guided first-run wizard
+- [x] Model routing preferences are respected by the orchestrator and workers
+- [x] Missing keys produce helpful suggestions, not crashes
+- [x] Project-level settings override global settings
+- [x] API keys from `.env` still work and take precedence
 
 ## Estimated Complexity
 
