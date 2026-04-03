@@ -423,19 +423,31 @@ impl App {
 
     pub async fn run(&mut self) -> Result<()> {
         let mut terminal = ratatui::init();
-        crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::EnableMouseCapture,
-            crossterm::event::EnableBracketedPaste
-        )?;
+        let mouse_capture_enabled = std::env::var("NALA_MOUSE_CAPTURE")
+            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false);
+        if mouse_capture_enabled {
+            crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::EnableMouseCapture,
+                crossterm::event::EnableBracketedPaste
+            )?;
+        } else {
+            // Default: keep mouse capture off so terminal text selection/copy works.
+            crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
+        }
         self.start_python_bridge().await;
         let result = self.event_loop(&mut terminal).await;
         self.cleanup_dashboard_process();
-        crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::DisableBracketedPaste,
-            crossterm::event::DisableMouseCapture
-        )?;
+        if mouse_capture_enabled {
+            crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::DisableBracketedPaste,
+                crossterm::event::DisableMouseCapture
+            )?;
+        } else {
+            crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste)?;
+        }
         ratatui::restore();
         result
     }
