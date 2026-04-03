@@ -79,11 +79,17 @@ def test_settings_writer_roundtrip():
 
         assert path.exists()
 
-        loader = SettingsLoader(root)
-        loaded = loader.load()
-        assert loaded.keys.anthropic_api_key == "sk-test-123"
-        assert loaded.models.default_provider == "openai"
-        assert loaded.models.default_model == "gpt-4o"
+        # Isolate from real env vars that would override TOML values
+        clean_env = {
+            k: v for k, v in os.environ.items()
+            if k not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "LLM_PROVIDER")
+        }
+        with patch.dict(os.environ, clean_env, clear=True):
+            loader = SettingsLoader(root)
+            loaded = loader.load()
+            assert loaded.keys.anthropic_api_key == "sk-test-123"
+            assert loaded.models.default_provider == "openai"
+            assert loaded.models.default_model == "gpt-4o"
 
 
 def test_settings_set_value_persists():

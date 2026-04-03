@@ -140,18 +140,31 @@ class Config(BaseModel):
         openai_key = _env("OPENAI_API_KEY", s.keys.openai_api_key) or None
         google_key = _env("GOOGLE_API_KEY", s.keys.google_api_key) or None
 
-        # Default models: env vars win, then settings.toml default
-        default_model = s.models.default_model
-        provider_model_defaults = {
-            "anthropic": ("ANTHROPIC_MODEL", default_model if provider == "anthropic" else "claude-sonnet-4-6"),
-            "openai": ("OPENAI_MODEL", default_model if provider == "openai" else "gpt-4o"),
-            "google": ("GOOGLE_MODEL", default_model if provider == "google" else "gemini-2.0-flash"),
-            "ollama": ("OLLAMA_MODEL", default_model if provider == "ollama" else "codellama:13b"),
+        # Default models: env vars win, then settings.toml (only for matching
+        # provider), then hardcoded provider-specific defaults.
+        _PROVIDER_MODEL_DEFAULTS = {
+            "anthropic": "claude-sonnet-4-6",
+            "openai": "gpt-4o",
+            "google": "gemini-2.0-flash",
+            "ollama": "codellama:13b",
+        }
+        _PROVIDER_ENV_KEYS = {
+            "anthropic": "ANTHROPIC_MODEL",
+            "openai": "OPENAI_MODEL",
+            "google": "GOOGLE_MODEL",
+            "ollama": "OLLAMA_MODEL",
         }
 
         def _model(prov: str) -> str:
-            env_key, fallback = provider_model_defaults.get(prov, ("", "unknown"))
-            return _env(env_key, fallback)
+            env_key = _PROVIDER_ENV_KEYS.get(prov, "")
+            env_val = os.environ.get(env_key) if env_key else None
+            if env_val:
+                return env_val
+            # settings.toml default_model only applies to the active provider
+            # AND only if the user actually wrote a settings.toml file
+            if prov == provider and settings_loader.has_any_settings() and s.models.default_model:
+                return s.models.default_model
+            return _PROVIDER_MODEL_DEFAULTS.get(prov, "unknown")
 
         return cls(
             llm_provider=provider,  # type: ignore[arg-type]

@@ -93,12 +93,17 @@ def _suggest_actions(
     """Generate 3–5 contextual suggestions based on repo state."""
     suggestions: list[str] = []
 
-    # Check if settings are configured
+    # Check if settings are configured — load dotenv first so .env keys
+    # are visible, then check both env vars and settings.toml.
     settings_path = root / ".nala" / "settings.toml"
     has_settings = settings_path.exists()
 
-    # Check for API keys
     import os
+    from dotenv import load_dotenv
+    env_path = root / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=False)
+
     has_any_key = bool(
         os.environ.get("ANTHROPIC_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
