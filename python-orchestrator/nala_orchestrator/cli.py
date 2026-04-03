@@ -1342,10 +1342,12 @@ async def handle_request(
         objective = req.get("objective", "").strip()
         autonomy = req.get("autonomy", "autonomous").strip()
         if not objective:
-            write_response({"id": req_id, "type": "error", "text": "Empty objective"})
+            write_response({"id": req_id, "type": "error", "text": "Usage: /agent objective <goal>"})
+            write_response({"id": req_id, "type": "done"})
             return
         if _agent_manager is None:
-            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime is starting up — try again in a moment."})
+            write_response({"id": req_id, "type": "done"})
             return
         try:
             write_response({
@@ -1357,12 +1359,16 @@ async def handle_request(
             write_response({"id": req_id, "type": "done"})
             _broadcast_agent_state(req_id)
         except Exception as e:
-            write_response({"id": req_id, "type": "error", "text": str(e)})
+            log.error("agent_objective failed: %s", e)
+            write_response({"id": req_id, "type": "chunk", "text": f"\n**Error:** {e}\n\nUse `/agent status` to check state or `/agent objective` to retry.\n"})
+            write_response({"id": req_id, "type": "done"})
+            _broadcast_agent_state(req_id)
 
     elif req_type == "agent_approve_missions":
         approved = req.get("approved", True)
         if _agent_manager is None:
-            write_response({"id": req_id, "type": "error", "text": "Agent runtime not ready"})
+            write_response({"id": req_id, "type": "error", "text": "Agent runtime is starting up — try again in a moment."})
+            write_response({"id": req_id, "type": "done"})
             return
         try:
             async for chunk in _agent_manager.approve_missions(approved):
@@ -1370,7 +1376,10 @@ async def handle_request(
             write_response({"id": req_id, "type": "done"})
             _broadcast_agent_state(req_id)
         except Exception as e:
-            write_response({"id": req_id, "type": "error", "text": str(e)})
+            log.error("agent_approve_missions failed: %s", e)
+            write_response({"id": req_id, "type": "chunk", "text": f"\n**Error:** {e}\n\nUse `/agent missions` to check state.\n"})
+            write_response({"id": req_id, "type": "done"})
+            _broadcast_agent_state(req_id)
 
     elif req_type == "agent_missions_status":
         if _agent_manager is None:

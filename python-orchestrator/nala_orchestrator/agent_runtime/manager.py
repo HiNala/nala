@@ -494,9 +494,12 @@ class AgentManager:
             ):
                 research_chunks.append(chunk)
             research_context = "".join(research_chunks)
-            yield f"Research gathered ({len(research_context)} chars)\n\n"
+            if research_context.strip():
+                yield f"Research gathered ({len(research_context)} chars)\n\n"
+            else:
+                yield "No external research available — proceeding with local context.\n\n"
         except Exception as exc:
-            yield f"Research phase skipped: {exc}\n\n"
+            yield f"Research phase skipped ({type(exc).__name__}: {str(exc)[:60]}). Proceeding with local context.\n\n"
 
         # Phase 2: Generate missions
         self._transition(AgentPhase.GENERATING_MISSIONS)
@@ -508,7 +511,8 @@ class AgentManager:
             async for chunk in self.toolbox.stream_action_query(plan_prompt):
                 plan_chunks.append(chunk)
         except Exception as exc:
-            yield f"**Plan generation failed:** {exc}\n"
+            yield f"**Plan generation failed:** {type(exc).__name__}: {exc}\n"
+            yield "  Check your API key with `/settings` or `/models`. Use `/agent objective` to retry.\n"
             self._transition(AgentPhase.BLOCKED)
             return
 

@@ -24,6 +24,12 @@ if TYPE_CHECKING:
 log = logging.getLogger("nala.agent_runtime.executor")
 
 MAX_CONCURRENT_WORKERS = 3
+MAX_RETRIES = 1
+
+_FAILURE_SIGNALS = frozenset({
+    "error", "failed", "exception", "traceback",
+    "cannot", "unable to", "not found",
+})
 
 
 @dataclass
@@ -32,6 +38,7 @@ class MissionResult:
     success: bool
     summary: str = ""
     files_changed: list[str] = field(default_factory=list)
+    attempts: int = 1
 
 
 class MissionExecutor:
@@ -76,8 +83,9 @@ class MissionExecutor:
             if not ready:
                 blocked = [m.id for m in pending.values()]
                 yield f"\n**Deadlock detected** — blocked missions: {blocked}\n"
+                yield "  Check mission dependencies for circular references.\n"
                 for mid in blocked:
-                    self._writer.update_mission_status(mid, MissionStatus.FAILED, "Deadlock")
+                    self._writer.update_mission_status(mid, MissionStatus.FAILED, "Deadlock — circular dependency")
                 break
 
             groups = self._group_parallel(ready)
@@ -90,7 +98,7 @@ class MissionExecutor:
                     m = group_missions[0]
                     yield f"### [{done_count + 1}/{total}] {m.title}\n"
                     self._writer.update_mission_status(m.id, MissionStatus.IN_PROGRESS)
-                    result = await self._execute_single(m)
+                    result = await self._execute_with_retry(m)
                     self._results[m.id] = result
                     if result.success:
                         self._writer.update_mission_status(
@@ -104,14 +112,15 @@ class MissionExecutor:
                             m.id, MissionStatus.FAILED, result.summary
                         )
                         done_count += 1
-                        yield f"  **Failed** — {result.summary[:120]}\n\n"
+                        retried = f" (after {result.attempts} attempts)" if result.attempts > 1 else ""
+                        yield f"  **Failed**{retried} — {result.summary[:120]}\n\n"
                     del pending[m.id]
                 else:
                     yield f"### Parallel group `{group_id}` — {len(group_missions)} missions\n"
                     for m in group_missions:
                         self._writer.update_mission_status(m.id, MissionStatus.IN_PROGRESS)
 
-                    tasks = [self._execute_single(m) for m in group_missions]
+                    tasks = [self._execute_with_retry(m) for m in group_missions]
                     results = await asyncio.gather(*tasks, return_exceptions=True)
 
                     for m, res in zip(group_missions, results):
@@ -119,7 +128,7 @@ class MissionExecutor:
                             res = MissionResult(
                                 mission_id=m.id,
                                 success=False,
-                                summary=str(res),
+                                summary=f"Unexpected error: {res}",
                             )
                         self._results[m.id] = res
                         if res.success:
@@ -140,12 +149,27 @@ class MissionExecutor:
         succeeded = sum(1 for r in self._results.values() if r.success)
         failed = sum(1 for r in self._results.values() if not r.success)
         yield f"\n## Execution complete: {succeeded} succeeded, {failed} failed out of {total}\n"
+        if failed > 0:
+            yield "  Use `/agent missions` to inspect failed missions, or `/agent objective` to retry.\n"
+
+    async def _execute_with_retry(self, mission: MissionFile) -> MissionResult:
+        """Execute a mission with one automatic retry on failure."""
+        result = await self._execute_single(mission)
+        if result.success or self._cancelled:
+            return result
+
+        if MAX_RETRIES < 1:
+            return result
+
+        log.info("Retrying mission %s after failure: %s", mission.id, result.summary[:80])
+        retry = await self._execute_single(mission)
+        retry.attempts = 2
+        return retry
 
     async def _execute_single(self, mission: MissionFile) -> MissionResult:
         """Execute one mission using the orchestrator."""
         try:
             from ..agents.orchestrator import AgentOrchestrator
-            from ..llm.provider import create_provider_for
 
             task_type = mission.task_type.lower()
             model_override: tuple[str, str] | None = None
@@ -164,8 +188,8 @@ class MissionExecutor:
                 )
                 route = router.route(tt)
                 model_override = (route.provider.value, route.model_id)
-            except (ValueError, Exception):
-                pass
+            except (ValueError, Exception) as exc:
+                log.debug("Model routing fallback for %s: %s", mission.id, exc)
 
             agent = AgentOrchestrator(self._config, model_override=model_override)
 
@@ -186,18 +210,35 @@ class MissionExecutor:
             async for chunk in agent.stream_query(prompt):
                 chunks.append(chunk)
 
-            summary = "".join(chunks)[:500]
+            full_response = "".join(chunks)
+            if not full_response.strip():
+                return MissionResult(
+                    mission_id=mission.id,
+                    success=False,
+                    summary="Empty response from model — check API key and model availability.",
+                )
+
+            response_lower = full_response[:2000].lower()
+            has_failure = any(sig in response_lower for sig in _FAILURE_SIGNALS)
+            has_success = any(
+                w in response_lower
+                for w in ("completed", "done", "implemented", "created", "added", "updated", "fixed")
+            )
+            success = has_success or not has_failure
+
+            summary = full_response[:500]
             return MissionResult(
                 mission_id=mission.id,
-                success=True,
+                success=success,
                 summary=summary or "Completed",
             )
         except Exception as exc:
             log.error("Mission %s failed: %s", mission.id, exc)
+            user_msg = _friendly_error(exc)
             return MissionResult(
                 mission_id=mission.id,
                 success=False,
-                summary=str(exc),
+                summary=user_msg,
             )
 
     def _get_ready_missions(
@@ -227,3 +268,17 @@ class MissionExecutor:
                 seq_counter += 1
             groups.setdefault(key, []).append(m)
         return groups
+
+
+def _friendly_error(exc: Exception) -> str:
+    """Convert exceptions to user-friendly messages."""
+    msg = str(exc)
+    if "401" in msg or "authentication" in msg.lower() or "api key" in msg.lower():
+        return f"Authentication failed — check your API key. ({msg[:80]})"
+    if "429" in msg or "rate" in msg.lower():
+        return f"Rate limited — wait a moment and retry. ({msg[:80]})"
+    if "timeout" in msg.lower() or "timed out" in msg.lower():
+        return f"Request timed out — the model may be overloaded. ({msg[:80]})"
+    if "connection" in msg.lower():
+        return f"Connection error — check your network. ({msg[:80]})"
+    return f"Error: {msg[:200]}"
