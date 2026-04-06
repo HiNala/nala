@@ -713,20 +713,56 @@ async def handle_request(
         _t0 = _time.monotonic()
         log.warning("QUERY START id=%s text=%r", req_id, text[:60])
 
-        # Hard deadline: if no first chunk arrives within _FIRST_CHUNK_TIMEOUT or
-        # the full stream takes longer than _STREAM_TIMEOUT, cancel and error.
+        # Two-tier timeout:
+        #   _FIRST_CHUNK_TIMEOUT — if the API doesn't start responding within this
+        #     time, abort and show a helpful message.  Catches silent API hangs.
+        #   _STREAM_TIMEOUT — total wall-clock budget for the full response.
+        _FIRST_CHUNK_TIMEOUT = 20.0
         _STREAM_TIMEOUT = 90.0
 
         got_chunk = False
+        first_chunk_event = asyncio.Event()
 
         async def _do_stream() -> None:
             nonlocal got_chunk
             async for chunk in agent.stream_query(text):
+                if not got_chunk:
+                    first_chunk_event.set()
                 got_chunk = True
                 write_response({"id": req_id, "type": "chunk", "text": chunk})
 
+        stream_task = asyncio.create_task(_do_stream())
+
+        # Wait for first chunk with a tight timeout; if it doesn't arrive, cancel.
         try:
-            await asyncio.wait_for(_do_stream(), timeout=_STREAM_TIMEOUT)
+            await asyncio.wait_for(
+                asyncio.shield(first_chunk_event.wait()),
+                timeout=_FIRST_CHUNK_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            # First chunk didn't arrive — check if the task itself already failed.
+            if not stream_task.done():
+                stream_task.cancel()
+                try:
+                    await stream_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            _elapsed = _time.monotonic() - _t0
+            log.error("QUERY FIRST-CHUNK TIMEOUT id=%s elapsed=%.1fs", req_id, _elapsed)
+            write_response({
+                "id": req_id, "type": "error",
+                "text": (
+                    f"No response from AI after {_elapsed:.0f}s.\n"
+                    "Possible causes: API key issue, network problem, or the model is overloaded.\n"
+                    "Check `/settings` for your API key, or try again in a moment."
+                ),
+            })
+            write_response({"id": req_id, "type": "done"})
+            return
+
+        # First chunk arrived — let the rest of the stream complete under the full timeout.
+        try:
+            await asyncio.wait_for(stream_task, timeout=_STREAM_TIMEOUT)
             write_response({"id": req_id, "type": "done"})
             _elapsed = _time.monotonic() - _t0
             log.warning(
@@ -734,15 +770,12 @@ async def handle_request(
                 req_id, got_chunk, _elapsed,
             )
         except asyncio.TimeoutError:
+            stream_task.cancel()
             _elapsed = _time.monotonic() - _t0
-            log.error("QUERY TIMEOUT id=%s elapsed=%.1fs", req_id, _elapsed)
+            log.error("QUERY STREAM TIMEOUT id=%s elapsed=%.1fs", req_id, _elapsed)
             write_response({
-                "id": req_id, "type": "error",
-                "text": (
-                    f"Response timed out after {_elapsed:.0f}s — "
-                    "the API may be slow or your network is throttling the connection. "
-                    "Please try again."
-                ),
+                "id": req_id, "type": "chunk",
+                "text": "\n\n_(response cut off — stream exceeded time limit)_",
             })
             write_response({"id": req_id, "type": "done"})
         except Exception as e:

@@ -22,8 +22,16 @@ class AnthropicProvider(BaseLLMProvider):
         super().__init__(config, model_override=model_override)
         try:
             import anthropic
+            # Override the SDK default (600 s) with sane per-operation timeouts.
+            # connect=5s, read=30s, write=10s, pool=5s.
             self._client = anthropic.AsyncAnthropic(
-                api_key=config.anthropic_api_key or ""
+                api_key=config.anthropic_api_key or "",
+                timeout=anthropic.Timeout(
+                    connect=5.0,
+                    read=30.0,
+                    write=10.0,
+                    pool=5.0,
+                ),
             )
         except ImportError as e:
             raise ImportError(

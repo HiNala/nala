@@ -493,11 +493,25 @@ class AgentOrchestrator:
         return result.summary
 
     def _maybe_compact(self, query: str) -> None:
-        """Auto-compact if the detector says it is time."""
-        usage = self.get_context_usage()
+        """Auto-compact if the detector says it is time.
+
+        Uses a cheap message-count heuristic first to avoid building the full
+        system prompt (which requires BM25 retrieval) on every query.
+        Only when the cheap check passes do we pay the full token-count cost.
+        """
+        history_len = len(self.context.messages)
+        # Cheap fast path: skip if below minimum turn threshold.
+        if history_len < self._compaction_cfg.min_turns_before_compact:
+            return
+        # Full cost path: actually measure token usage.
+        try:
+            usage = self.get_context_usage()
+        except Exception as exc:
+            logger.debug("get_context_usage failed during compaction check: %s", exc)
+            return
         should = self._detector.should_compact_now(
             utilization_pct=usage.utilization_pct,
-            history_len=len(self.context.messages),
+            history_len=history_len,
             min_turns=self._compaction_cfg.min_turns_before_compact,
         )
         if should:
@@ -578,7 +592,16 @@ class AgentOrchestrator:
         self.context.trim_to_limit()
         session.append_turn("user", user_message)
 
-        action_system = self.build_system_prompt(user_message) + ACTION_PROMPT_EXTENSION
+        import asyncio as _asyncio
+        try:
+            base_prompt = await _asyncio.wait_for(
+                _asyncio.to_thread(self.build_system_prompt, user_message),
+                timeout=10.0,
+            )
+        except (_asyncio.TimeoutError, Exception) as exc:
+            logger.warning("build_system_prompt error in stream_query_with_actions: %s", exc)
+            base_prompt = f"You are Nala, an AI coding assistant. Project: {self.context.project_root}"
+        action_system = base_prompt + ACTION_PROMPT_EXTENSION
         full_response: list[str] = []
         had_error = False
         try:
@@ -611,7 +634,14 @@ class AgentOrchestrator:
             self._bg_summary.on_turn(history)
 
     async def stream_query(self, user_message: str) -> AsyncIterator[str]:
-        """Stream a response token by token."""
+        """Stream a response token by token.
+
+        build_system_prompt is run in a thread so it never blocks the event loop
+        during BM25 retrieval and filesystem traversal.  A first-chunk timeout
+        catches silent API hangs before the full stream timeout fires.
+        """
+        import asyncio as _asyncio
+
         if not self.config.has_llm():
             yield (
                 "No LLM provider configured. "
@@ -623,10 +653,26 @@ class AgentOrchestrator:
 
         session = self.ensure_session()
         self._detector.mark_user_message()
+        # Only compact when truly needed — avoids an extra build_system_prompt call
+        # on every query which was blocking the event loop.
         self._maybe_compact(user_message)
         self.context.add_user(user_message)
         self.context.trim_to_limit()
         session.append_turn("user", user_message)
+
+        # Build the system prompt in a thread so BM25 retrieval and file I/O
+        # do not block the asyncio event loop.
+        try:
+            system_prompt = await _asyncio.wait_for(
+                _asyncio.to_thread(self.build_system_prompt, user_message),
+                timeout=10.0,
+            )
+        except _asyncio.TimeoutError:
+            logger.warning("build_system_prompt timed out — using minimal prompt")
+            system_prompt = f"You are Nala, an AI coding assistant. Project: {self.context.project_root}"
+        except Exception as exc:
+            logger.error("build_system_prompt failed: %s", exc)
+            system_prompt = f"You are Nala, an AI coding assistant. Project: {self.context.project_root}"
 
         full_response: list[str] = []
         had_error = False
@@ -634,7 +680,7 @@ class AgentOrchestrator:
             provider = self._get_provider()
             async for chunk in provider.stream_chat(
                 messages=self.context.messages,
-                system_prompt=self.build_system_prompt(user_message),
+                system_prompt=system_prompt,
             ):
                 full_response.append(chunk)
                 yield chunk
