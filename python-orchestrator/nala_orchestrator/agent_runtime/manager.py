@@ -522,12 +522,26 @@ class AgentManager:
         chat_with_tools, so we always go through the tool loop.  The old
         stream_action_query fallback is kept only if provider creation fails.
         """
+        import asyncio as _asyncio
         self.start(objective)
         self._transition(AgentPhase.EXECUTING)
 
         provider = self._get_tool_provider()
         if provider is not None:
-            system_prompt = self._build_agent_system_prompt(objective)
+            # Build system prompt in a thread — git_status() and tree() involve
+            # subprocess calls and filesystem traversal that block the event loop.
+            try:
+                system_prompt = await _asyncio.wait_for(
+                    _asyncio.to_thread(self._build_agent_system_prompt, objective),
+                    timeout=8.0,
+                )
+            except (_asyncio.TimeoutError, Exception) as exc:
+                log.warning("_build_agent_system_prompt error: %s", exc)
+                system_prompt = (
+                    f"You are Nala, an autonomous AI coding agent.\n"
+                    f"Project root: {self.project_root}\n"
+                    "Use tools to read, write, and navigate the codebase."
+                )
             from .tool_executor import run_tool_loop
             async for chunk in run_tool_loop(
                 provider=provider,
@@ -624,6 +638,19 @@ class AgentManager:
             "- `git_log(max_commits?)` — Recent commit history.",
             "- `git_commit(message, add_all?)` — Stage and commit. Use to checkpoint work.",
             "",
+            "### Agent delegation (for complex multi-step tasks)",
+            "- `spawn_worker(task, label?)` — Delegate a focused sub-task to a child agent with full tool access.",
+            "  Use when a task is too large for one context window or you want parallel focused execution.",
+            "  The child agent can read/write files, run shell commands, and commit changes.",
+            "  Scope the task tightly: include which files to touch and the acceptance criterion.",
+            "  Returns the child agent's final response (up to 8K chars).",
+            "",
+            "### Progress checkpoints (for long-running tasks)",
+            "- `write_checkpoint(label, content)` — Save progress to .nala/agent/checkpoints/<label>.md.",
+            "  Use at the end of each completed sub-task so work survives interruptions.",
+            "- `read_checkpoint(label?)` — Read a checkpoint or list all available checkpoints.",
+            "  Use at the start to resume interrupted work.",
+            "",
             "## Standard workflow for any coding task",
             "1. **Explore** — `tree()` or `list_files()` to understand layout.",
             "2. **Locate** — `find_in_files(pattern)` to find the exact code you need to change.",
@@ -641,6 +668,8 @@ class AgentManager:
             "- Use `find_in_files` before searching your memory for function names — they may have changed.",
             "- If a shell command fails, read the error carefully and adapt. Don't retry blindly.",
             "- After editing Python, run `run_shell('python -c \"import ast; ast.parse(open(\\'path\\').read())\"')` to check syntax.",
+            "- For complex tasks with 3+ independent sub-tasks: use `spawn_worker` to delegate each one.",
+            "- Use `write_checkpoint` after each major milestone so interrupted work can be resumed.",
             "",
             "## Project structure",
             tree_text[:4000],
