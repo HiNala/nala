@@ -398,4 +398,84 @@ AGENT_TOOLS: list[dict] = [
             },
         },
     },
+
+    # ── Agent delegation ─────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_worker",
+            "description": (
+                "Delegate a self-contained sub-task to a child agent that has full tool access. "
+                "Use this to run independent sub-tasks in sequence when a task is too large for "
+                "one context window, or when you want a focused agent to handle a specific scope. "
+                "The child agent can read/write files, run shell commands, and make git commits. "
+                "Returns the child agent's final response. "
+                "Scope the task tightly — include what files to touch and the acceptance criterion."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "Full description of the sub-task for the child agent. "
+                            "Include: what to do, which files to touch, and how to verify it worked."
+                        ),
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Short human-readable label for progress display (e.g. 'fix-typescript-types')",
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+
+    # ── Progress tracking ────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "write_checkpoint",
+            "description": (
+                "Write a progress checkpoint file so long-running work survives interruptions. "
+                "Use at the end of each completed task. The file can be read back later to resume. "
+                "Writes to .nala/agent/checkpoints/<label>.md"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Identifier for this checkpoint (e.g. 'task-3-complete')",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "What was completed, what was changed, and what comes next",
+                    },
+                },
+                "required": ["label", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_checkpoint",
+            "description": (
+                "Read a previously written checkpoint file to resume interrupted work. "
+                "Returns the checkpoint content, or lists available checkpoints if no label given."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Checkpoint label to read (omit to list all checkpoints)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
 ]

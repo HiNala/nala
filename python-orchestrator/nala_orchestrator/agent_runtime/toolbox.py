@@ -599,3 +599,89 @@ class Toolbox:
             return
         async for chunk in self._orchestrator.stream_query_with_actions(message):
             yield chunk
+
+    # ── Agent delegation ──────────────────────────────────────────────
+
+    async def spawn_worker(self, task: str, label: str = "") -> str:
+        """Run a child tool-calling agent for a focused sub-task.
+
+        The child agent gets full tool access and runs its own tool loop.
+        Use this to delegate self-contained chunks of work so the parent
+        agent's context stays clean.
+        """
+        from .tool_executor import run_tool_loop
+        from ..llm.provider import create_provider
+
+        label = label or "worker"
+        system_prompt = (
+            f"You are a focused coding agent handling the sub-task: {label}.\n"
+            f"You have full tool access. Complete the task, verify your work, "
+            f"and report what you did.\n"
+            f"Project root: {self.project_root}"
+        )
+        try:
+            provider = create_provider(self.config)
+        except Exception as exc:
+            return f"(spawn_worker: could not create provider — {exc})"
+
+        chunks: list[str] = []
+        try:
+            async for chunk in run_tool_loop(
+                provider=provider,
+                toolbox=self,          # child shares parent's toolbox
+                system_prompt=system_prompt,
+                user_message=task,
+                max_rounds=20,
+                max_tokens=4096,
+            ):
+                chunks.append(chunk)
+        except Exception as exc:
+            return f"(spawn_worker: tool loop error — {exc})"
+
+        result = "".join(chunks)
+        return result[:8000] if result else "(spawn_worker: no output)"
+
+    # ── Progress checkpoints ──────────────────────────────────────────
+
+    def write_checkpoint(self, label: str, content: str) -> str:
+        """Write a progress checkpoint to .nala/agent/checkpoints/<label>.md"""
+        if not label or not label.strip():
+            return "(checkpoint label cannot be empty)"
+        checkpoints_dir = self.project_root / ".nala" / "agent" / "checkpoints"
+        try:
+            checkpoints_dir.mkdir(parents=True, exist_ok=True)
+            safe_label = "".join(c if c.isalnum() or c in "-_" else "_" for c in label)
+            path = checkpoints_dir / f"{safe_label}.md"
+            path.write_text(f"# Checkpoint: {label}\n\n{content}\n", encoding="utf-8")
+            return f"Checkpoint written: {path.relative_to(self.project_root)}"
+        except Exception as exc:
+            return f"(write_checkpoint error: {exc})"
+
+    def read_checkpoint(self, label: str = "") -> str:
+        """Read a checkpoint, or list all checkpoints if label is empty."""
+        checkpoints_dir = self.project_root / ".nala" / "agent" / "checkpoints"
+        if not checkpoints_dir.exists():
+            return "(no checkpoints directory — no checkpoints written yet)"
+
+        if not label:
+            files = sorted(checkpoints_dir.glob("*.md"))
+            if not files:
+                return "(no checkpoints found)"
+            lines = ["**Available checkpoints:**"]
+            for f in files:
+                lines.append(f"  - {f.stem}")
+            return "\n".join(lines)
+
+        safe_label = "".join(c if c.isalnum() or c in "-_" else "_" for c in label)
+        path = checkpoints_dir / f"{safe_label}.md"
+        if not path.exists():
+            # Try fuzzy match
+            matches = list(checkpoints_dir.glob(f"*{safe_label}*.md"))
+            if matches:
+                path = matches[0]
+            else:
+                return f"(checkpoint not found: {label})"
+        try:
+            return path.read_text(encoding="utf-8")
+        except Exception as exc:
+            return f"(read_checkpoint error: {exc})"

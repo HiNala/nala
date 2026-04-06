@@ -116,6 +116,15 @@ def _dispatch_tool(toolbox: Toolbox, name: str, args: dict) -> str:
                 add_all=bool(args.get("add_all", True)),
             )
 
+        # ── Progress tracking ─────────────────────────────────────────────────
+        case "write_checkpoint":
+            return toolbox.write_checkpoint(
+                label=args.get("label", ""),
+                content=args.get("content", ""),
+            )
+        case "read_checkpoint":
+            return toolbox.read_checkpoint(label=args.get("label", ""))
+
         case _:
             return f"(unknown tool: {name})"
 
@@ -125,7 +134,26 @@ async def _dispatch_tool_async(toolbox: Toolbox, name: str, args: dict) -> str:
 
     Most tools are synchronous; they run in a thread via asyncio.to_thread
     so they don't block the event loop.  Each call is bounded by _TOOL_TIMEOUT.
+
+    spawn_worker is natively async (it runs a full child tool loop) and
+    is dispatched directly without the thread wrapper.
     """
+    # spawn_worker runs its own async tool loop — dispatch natively, not in a thread.
+    if name == "spawn_worker":
+        try:
+            return await asyncio.wait_for(
+                toolbox.spawn_worker(
+                    task=args.get("task", ""),
+                    label=args.get("label", ""),
+                ),
+                timeout=300,  # child agents can run up to 5 min
+            )
+        except asyncio.TimeoutError:
+            return "(spawn_worker timed out after 300s)"
+        except Exception as exc:
+            log.error("spawn_worker raised: %s", exc)
+            return f"(spawn_worker error: {exc})"
+
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(_dispatch_tool, toolbox, name, args),
