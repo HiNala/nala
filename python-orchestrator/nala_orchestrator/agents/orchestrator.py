@@ -53,6 +53,9 @@ referencing code.
 
 {project_brief}
 
+## Environment
+{environment_context}
+
 ## What you can do right now
 - Answer questions about architecture, data flow, and dependencies using the
   indexed code chunks provided below.
@@ -233,10 +236,17 @@ class AgentOrchestrator:
 
         lines: list[str] = []
 
+        # ASCII-only connectors — safe on all platforms and encodings
+        # (Windows cp1252 / PowerShell cannot encode Unicode box-drawing chars).
+        _LAST = "\\-- "
+        _MID  = "+-- "
+        _CONT = "|   "
+        _PAD  = "    "
+
         # Root-level files first — always visible to the AI
         all_root_items = root_files + root_dirs
         for i, f in enumerate(root_files):
-            connector = "└── " if i == len(all_root_items) - 1 else "├── "
+            connector = _LAST if i == len(all_root_items) - 1 else _MID
             lines.append(f"{connector}{f.name}")
 
         def _walk(p: Path, prefix: str, depth: int) -> None:
@@ -259,21 +269,81 @@ class AgentOrchestrator:
                 if len(lines) >= max_lines:
                     lines.append(f"{prefix}...")
                     return
-                connector = "└── " if j == len(items) - 1 else "├── "
+                connector = _LAST if j == len(items) - 1 else _MID
                 lines.append(f"{prefix}{connector}{entry.name}{'/' if entry.is_dir() else ''}")
                 if entry.is_dir() and depth < 2:
-                    extension = "    " if j == len(items) - 1 else "│   "
+                    extension = _PAD if j == len(items) - 1 else _CONT
                     _walk(entry, prefix + extension, depth + 1)
 
         # Directories after root files
         for i, d in enumerate(root_dirs):
             is_last = (i == len(root_dirs) - 1)
-            connector = "└── " if is_last else "├── "
+            connector = _LAST if is_last else _MID
             lines.append(f"{connector}{d.name}/")
-            extension = "    " if is_last else "│   "
+            extension = _PAD if is_last else _CONT
             _walk(d, extension, 1)
 
         return "\n".join(lines) if lines else "(empty project)"
+
+    # ── Environment context ────────────────────────────────────────────────
+
+    def _build_environment_context(self) -> str:
+        """Collect OS, shell, Python, and git state for the system prompt.
+
+        Gives the agent situational awareness so it can suggest correct
+        shell commands (PowerShell vs bash), know the current branch, and
+        understand what work is in progress.  All subprocess calls use the
+        existing git_ops helpers which are already timeout-guarded.
+        """
+        import platform
+        import sys as _sys
+
+        from ..git_ops import (
+            branch_info,
+            current_branch,
+            is_git_repo,
+            recent_commits,
+            uncommitted_summary,
+        )
+
+        root = Path(self.context.project_root)
+        lines: list[str] = []
+
+        # OS / runtime
+        os_name = platform.system()          # "Windows", "Linux", "Darwin"
+        os_ver  = platform.version()[:60]    # truncate long Windows build strings
+        py_ver  = f"{_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}"
+        shell   = "PowerShell / cmd" if os_name == "Windows" else "bash/zsh"
+        lines.append(f"- **OS:** {os_name} {os_ver}")
+        lines.append(f"- **Shell:** {shell} (use {('PowerShell' if os_name == 'Windows' else 'bash')} syntax in commands)")
+        lines.append(f"- **Python:** {py_ver}")
+
+        # Git state
+        if is_git_repo(root):
+            branch = current_branch(root) or "detached HEAD"
+            uc     = uncommitted_summary(root)
+            total  = uc.get("total", 0)
+            dirty  = ""
+            if total:
+                parts = []
+                if uc.get("staged"):
+                    parts.append(f"{uc['staged']} staged")
+                if uc.get("modified"):
+                    parts.append(f"{uc['modified']} modified")
+                if uc.get("untracked"):
+                    parts.append(f"{uc['untracked']} untracked")
+                dirty = f" ({', '.join(parts)})"
+            lines.append(f"- **Git branch:** `{branch}`{dirty}")
+
+            commits = recent_commits(root, count=5)
+            if commits:
+                lines.append("- **Recent commits:**")
+                for c in commits:
+                    lines.append(f"  - `{c['hash']}` {c['subject']} — {c['when']}")
+        else:
+            lines.append("- **Git:** not a git repository")
+
+        return "\n".join(lines)
 
     # ── Project brief ─────────────────────────────────────────────────────
 
@@ -382,13 +452,12 @@ class AgentOrchestrator:
                 self._provider = create_provider(self.config)
         return self._provider
 
-    def _get_static_parts(self) -> tuple[str, str, str]:
-        """Return (file_tree, project_brief, commands) from cache or rebuild.
+    def _get_static_parts(self) -> tuple[str, str, str, str]:
+        """Return (file_tree, project_brief, commands, env_ctx) from cache or rebuild.
 
-        The file tree, README, and detected commands don't change between
-        queries.  Caching them for 30 s avoids two full filesystem traversals
-        per query (one from _maybe_compact → get_context_usage, one from
-        stream_query itself).
+        File tree, README, commands, and environment context are rebuilt at
+        most once every 30 s so rapid successive queries don't re-walk the
+        filesystem or re-run git commands on every turn.
         """
         now = time.monotonic()
         if (
@@ -400,7 +469,8 @@ class AgentOrchestrator:
         file_tree = self._build_file_tree()
         project_brief = self._load_project_brief()
         cmds = _cmds(Path(self.context.project_root))
-        self._static_parts_cache = (file_tree, project_brief, cmds)
+        env_ctx = self._build_environment_context()
+        self._static_parts_cache = (file_tree, project_brief, cmds, env_ctx)
         self._static_parts_ts = now
         return self._static_parts_cache
 
@@ -415,7 +485,7 @@ class AgentOrchestrator:
     def build_system_prompt(self, query: str = "") -> str:
         """Build the system prompt with current project context and retrieved chunks."""
         retrieved = self._retrieve_context(query) if query else "(no query provided)"
-        file_tree, project_brief, cmds = self._get_static_parts()
+        file_tree, project_brief, cmds, env_ctx = self._get_static_parts()
         base = SYSTEM_PROMPT_TEMPLATE.format(
             project_name=Path(self.context.project_root).name,
             project_root=self.context.project_root,
@@ -423,6 +493,7 @@ class AgentOrchestrator:
             total_symbols=self.context.total_symbols,
             primary_language=self.context.primary_language,
             project_brief=project_brief,
+            environment_context=env_ctx,
             file_tree=file_tree,
             retrieved_context=retrieved,
         )
@@ -492,32 +563,42 @@ class AgentOrchestrator:
 
         return result.summary
 
+    def _rough_token_estimate(self) -> int:
+        """Fast token estimate — safe to call on the asyncio event loop.
+
+        Avoids BM25 retrieval and file I/O entirely.  ~4 chars per token is a
+        conservative approximation; the result is used only to decide whether
+        to compact, not for billing or display.
+        """
+        # Fixed overhead: system prompt template + file tree + project brief.
+        base_tokens = 4_000
+        msg_tokens = sum(len(m.content) for m in self.context.messages) // 4
+        return base_tokens + msg_tokens
+
     def _maybe_compact(self, query: str) -> None:
         """Auto-compact if the detector says it is time.
 
-        Uses a cheap message-count heuristic first to avoid building the full
-        system prompt (which requires BM25 retrieval) on every query.
-        Only when the cheap check passes do we pay the full token-count cost.
+        Uses only a cheap char-count estimate — never BM25 retrieval — so it
+        is safe to call synchronously from an async generator without blocking
+        the event loop.  This avoids the double build_system_prompt (sync +
+        threaded) that caused RAM spikes and first-chunk timeouts with OpenAI.
         """
         history_len = len(self.context.messages)
-        # Cheap fast path: skip if below minimum turn threshold.
         if history_len < self._compaction_cfg.min_turns_before_compact:
             return
-        # Full cost path: actually measure token usage.
-        try:
-            usage = self.get_context_usage()
-        except Exception as exc:
-            logger.debug("get_context_usage failed during compaction check: %s", exc)
-            return
+        # Fast estimate: no BM25, no file I/O, no event-loop blocking.
+        est_tokens = self._rough_token_estimate()
+        max_tokens = getattr(self.config, "max_context_tokens", 100_000)
+        utilization_pct = min((est_tokens / max_tokens) * 100.0, 100.0)
         should = self._detector.should_compact_now(
-            utilization_pct=usage.utilization_pct,
+            utilization_pct=utilization_pct,
             history_len=history_len,
             min_turns=self._compaction_cfg.min_turns_before_compact,
         )
         if should:
             logger.info(
-                "Auto-compacting context at %.1f%% utilization",
-                usage.utilization_pct,
+                "Auto-compacting context at ~%.1f%% utilization (estimated)",
+                utilization_pct,
             )
             self.compact_now()
 

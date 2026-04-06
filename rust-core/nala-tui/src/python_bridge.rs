@@ -1174,6 +1174,12 @@ fn spawn_python_subprocess(root_str: &str) -> Result<Child> {
         }
         let attempt = cmd
             .env("PYTHONUNBUFFERED", "1")
+            // Force UTF-8 I/O on all platforms. On Windows, Python defaults to
+            // the system codepage (cp1252/cp437) which cannot encode the Unicode
+            // that LLM responses, file trees, and analysis output contain.
+            // PYTHONUTF8=1 is the official Python 3.7+ mechanism; cli.py also
+            // calls sys.stdout.reconfigure(encoding="utf-8") as a fallback.
+            .env("PYTHONUTF8", "1")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(bridge_stderr_stdio(root_str))

@@ -131,8 +131,11 @@ _lead_agent: LeadAgent | None = None
 # Agent runtime manager — central control plane for /agent runs.
 _agent_manager: AgentManager | None = None
 
-# Flush immediately — Rust reads line-by-line
-sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+# Force UTF-8 on all platforms (Windows defaults to cp1252 which cannot encode
+# box-drawing chars or many other Unicode codepoints used in responses).
+# line_buffering ensures each JSON line is flushed immediately for Rust's reader.
+sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore[attr-defined]
+sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 VERSION = "0.1.0"
 
