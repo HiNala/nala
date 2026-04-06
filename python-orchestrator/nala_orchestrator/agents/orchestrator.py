@@ -14,6 +14,7 @@ a question in the TUI, it comes here. The orchestrator:
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -191,6 +192,13 @@ class AgentOrchestrator:
         self._detector = OpportunityDetector()
         self._compactor = Compactor(keep_recent=self._compaction_cfg.keep_recent_turns)
         self._bg_summary = BackgroundSummary()
+        # Cached static prompt parts (file tree + brief + commands).
+        # Rebuilt at most once every 30 s — avoids redundant filesystem walks
+        # when _maybe_compact and stream_query both call build_system_prompt.
+        self._static_parts_cache: tuple[str, str, str] | None = None
+        self._static_parts_ts: float = 0.0
+        _STATIC_CACHE_TTL = 30.0  # seconds
+        self._STATIC_CACHE_TTL = _STATIC_CACHE_TTL
 
     # ── File tree ──────────────────────────────────────────────────────────
 
@@ -322,8 +330,8 @@ class AgentOrchestrator:
         if self._embedder is None or not self._embedder.is_ready():
             return "(index not yet available — try again after 'Index complete' appears)"
         from ..chunking.assembler import ContextAssembler
-        chunks = self._embedder.retrieve(query, top_k=40)
-        assembled = ContextAssembler().assemble(chunks, token_budget=32_000)
+        chunks = self._embedder.retrieve(query, top_k=15)
+        assembled = ContextAssembler().assemble(chunks)
         if assembled.included_chunks == 0:
             return "(no relevant code found for this query)"
         return (
@@ -374,11 +382,40 @@ class AgentOrchestrator:
                 self._provider = create_provider(self.config)
         return self._provider
 
+    def _get_static_parts(self) -> tuple[str, str, str]:
+        """Return (file_tree, project_brief, commands) from cache or rebuild.
+
+        The file tree, README, and detected commands don't change between
+        queries.  Caching them for 30 s avoids two full filesystem traversals
+        per query (one from _maybe_compact → get_context_usage, one from
+        stream_query itself).
+        """
+        now = time.monotonic()
+        if (
+            self._static_parts_cache is not None
+            and now - self._static_parts_ts < self._STATIC_CACHE_TTL
+        ):
+            return self._static_parts_cache
+        from ..repo_detect import commands_summary as _cmds
+        file_tree = self._build_file_tree()
+        project_brief = self._load_project_brief()
+        cmds = _cmds(Path(self.context.project_root))
+        self._static_parts_cache = (file_tree, project_brief, cmds)
+        self._static_parts_ts = now
+        return self._static_parts_cache
+
+    def invalidate_static_cache(self) -> None:
+        """Force a rebuild of the static prompt parts on the next query.
+
+        Call this after a file is edited or the index is refreshed so the
+        file tree and project brief reflect the updated state.
+        """
+        self._static_parts_ts = 0.0
+
     def build_system_prompt(self, query: str = "") -> str:
         """Build the system prompt with current project context and retrieved chunks."""
         retrieved = self._retrieve_context(query) if query else "(no query provided)"
-        file_tree = self._build_file_tree()
-        project_brief = self._load_project_brief()
+        file_tree, project_brief, cmds = self._get_static_parts()
         base = SYSTEM_PROMPT_TEMPLATE.format(
             project_name=Path(self.context.project_root).name,
             project_root=self.context.project_root,
@@ -414,8 +451,6 @@ class AgentOrchestrator:
         summary = self._bg_summary.get_summary_text()
         if summary and summary != "(no session summary yet)":
             base = base + "\n\n" + summary
-        from ..repo_detect import commands_summary
-        cmds = commands_summary(Path(self.context.project_root))
         if cmds:
             base = base + "\n\n" + cmds
         return base
@@ -577,8 +612,6 @@ class AgentOrchestrator:
 
     async def stream_query(self, user_message: str) -> AsyncIterator[str]:
         """Stream a response token by token."""
-        import asyncio as _asyncio
-
         if not self.config.has_llm():
             yield (
                 "No LLM provider configured. "
@@ -595,17 +628,13 @@ class AgentOrchestrator:
         self.context.trim_to_limit()
         session.append_turn("user", user_message)
 
-        # Build the system prompt in a thread so vector search doesn't block
-        # the event loop (especially costly when thousands of symbols are indexed).
-        system_prompt = await _asyncio.to_thread(self.build_system_prompt, user_message)
-
         full_response: list[str] = []
         had_error = False
         try:
             provider = self._get_provider()
             async for chunk in provider.stream_chat(
                 messages=self.context.messages,
-                system_prompt=system_prompt,
+                system_prompt=self.build_system_prompt(user_message),
             ):
                 full_response.append(chunk)
                 yield chunk

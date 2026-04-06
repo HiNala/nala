@@ -218,15 +218,12 @@ class MissionExecutor:
                     summary="Empty response from model — check API key and model availability.",
                 )
 
-            response_lower = full_response[:2000].lower()
-            has_failure = any(sig in response_lower for sig in _FAILURE_SIGNALS)
-            has_success = any(
-                w in response_lower
-                for w in ("completed", "done", "implemented", "created", "added", "updated", "fixed")
+            # Verify success by checking observable outcomes, not keyword matching.
+            success, verify_note = await _verify_mission_outcome(
+                self._root, mission, full_response
             )
-            success = has_success or not has_failure
 
-            summary = full_response[:500]
+            summary = (full_response[:400] + (f"\n\n[Verification: {verify_note}]" if verify_note else ""))
             return MissionResult(
                 mission_id=mission.id,
                 success=success,
@@ -268,6 +265,103 @@ class MissionExecutor:
                 seq_counter += 1
             groups.setdefault(key, []).append(m)
         return groups
+
+
+async def _verify_mission_outcome(
+    project_root: Path,
+    mission: MissionFile,
+    response: str,
+) -> tuple[bool, str]:
+    """Verify mission success by observable evidence, not keyword matching.
+
+    Priority order:
+    1. If acceptance criteria mention a verification command, run it.
+    2. Check if the response references files that were actually modified (git diff).
+    3. Check if scoped files were modified at all.
+    4. Fall back to conservative heuristic (explicit failure signals only).
+
+    Returns (success: bool, note: str) where note explains the verdict.
+    """
+    import subprocess
+
+    # 1. Run verification command if one is embedded in the acceptance criteria
+    verify_cmd = _extract_verify_command(mission.acceptance_criteria)
+    if verify_cmd:
+        try:
+            result = subprocess.run(
+                verify_cmd,
+                shell=True,
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0:
+                return True, f"Verification passed: `{verify_cmd}`"
+            else:
+                out = (result.stdout + result.stderr).strip()[:200]
+                return False, f"Verification failed (`{verify_cmd}`): {out}"
+        except subprocess.TimeoutExpired:
+            log.warning("Verification command timed out: %s", verify_cmd)
+        except Exception as exc:
+            log.debug("Verification command error: %s", exc)
+
+    # 2. Check git diff to see if any files changed
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--name-only"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        changed = [f.strip() for f in diff.stdout.splitlines() if f.strip()]
+        if changed:
+            # If mission had a scope, check overlap
+            if mission.scope:
+                scope_lower = {s.lower() for s in mission.scope}
+                overlap = [f for f in changed if any(s in f.lower() or f.lower() in s for s in scope_lower)]
+                if overlap:
+                    return True, f"Modified {len(overlap)} scoped file(s): {', '.join(overlap[:3])}"
+            return True, f"Modified {len(changed)} file(s): {', '.join(changed[:3])}"
+    except Exception:
+        pass
+
+    # 3. Conservative fallback: only fail on explicit hard errors, otherwise trust the agent
+    response_lower = response[:3000].lower()
+    hard_failures = {
+        "authentication failed", "api key", "rate limit",
+        "file not found", "permission denied", "cannot write",
+        "syntax error", "import error", "module not found",
+    }
+    if any(sig in response_lower for sig in hard_failures):
+        return False, "Response contains error signals"
+
+    return True, "No verification command available; no explicit errors detected"
+
+
+def _extract_verify_command(acceptance_criteria: list[str]) -> str:
+    """Extract a shell verification command from acceptance criteria if present.
+
+    Looks for patterns like 'Run cargo test', 'pytest passes', 'npm test passes'.
+    """
+    import re
+    patterns = [
+        r"`([^`]+)`",                           # `command` in backticks
+        r"run\s+([\w\s./\-]+(?:test|check|lint|build)[\w\s./\-]*)",  # "run cargo test"
+        r"(cargo\s+\w+|pytest[\w\s\-]*|npm\s+\w+|go\s+test|make\s+\w+)",
+    ]
+    for criterion in (acceptance_criteria or []):
+        for pattern in patterns:
+            m = re.search(pattern, criterion, re.IGNORECASE)
+            if m:
+                cmd = m.group(1).strip()
+                # Sanity check: must look like a real command
+                if len(cmd) >= 4 and " " in cmd or any(
+                    cmd.startswith(p) for p in ("cargo", "pytest", "npm", "go ", "make", "python")
+                ):
+                    return cmd
+    return ""
 
 
 def _friendly_error(exc: Exception) -> str:

@@ -111,7 +111,7 @@ class ResearchService:
 
         prompt = self._build_research_prompt(query)
         full_response = ""
-        async for chunk in self._orchestrator.stream(prompt):
+        async for chunk in self._orchestrator.stream_query(prompt):
             full_response += chunk
 
         return self._parse_research_response(query, full_response)

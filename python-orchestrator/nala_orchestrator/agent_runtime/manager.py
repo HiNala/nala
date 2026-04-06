@@ -516,11 +516,15 @@ class AgentManager:
         return f"Agent run `{self._run.run_id}` is already active (phase: {self._run.phase.value})"
 
     async def handle_objective(self, objective: str) -> AsyncIterator[str]:
-        """Start a new run and execute using tool-calling when available."""
+        """Start a new run and execute using the tool-calling loop.
+
+        All four providers (Anthropic, OpenAI, Google, Ollama) now implement
+        chat_with_tools, so we always go through the tool loop.  The old
+        stream_action_query fallback is kept only if provider creation fails.
+        """
         self.start(objective)
         self._transition(AgentPhase.EXECUTING)
 
-        # Try tool-calling loop first (OpenAI), fall back to streaming text
         provider = self._get_tool_provider()
         if provider is not None:
             system_prompt = self._build_agent_system_prompt(objective)
@@ -534,36 +538,29 @@ class AgentManager:
             ):
                 yield chunk
         else:
-            brief = self.load_project_brief()
-            guidance = self.load_scoped_guidance()
-            enriched = objective
-            if brief:
-                enriched = (
-                    f"[PROJECT BRIEF]\n{brief[:2000]}\n[END BRIEF]\n\n"
-                    + enriched
-                )
-            if guidance:
-                enriched = (
-                    f"[SCOPED GUIDANCE]\n{guidance[:1000]}\n[END GUIDANCE]\n\n"
-                    + enriched
-                )
-            async for chunk in self.toolbox.stream_action_query(enriched):
-                yield chunk
+            # Fallback: no provider could be created (misconfigured / no API key)
+            yield (
+                "No LLM provider available. "
+                "Add ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY "
+                "to your .env file and restart Nala.\n"
+            )
 
         if self._run:
             self._transition(AgentPhase.REVIEWING)
 
     def _get_tool_provider(self):
-        """Return an OpenAI provider if available (supports function calling)."""
+        """Return the configured LLM provider.
+
+        All providers now implement chat_with_tools so we can use any of them
+        for the tool-calling agent loop.  Returns None only if provider
+        construction fails (e.g. missing API key or bad config).
+        """
         try:
-            from ..llm.openai_provider import OpenAIProvider
             from ..llm.provider import create_provider
-            provider = create_provider(self.config)
-            if isinstance(provider, OpenAIProvider):
-                return provider
-        except Exception:
-            pass
-        return None
+            return create_provider(self.config)
+        except Exception as exc:
+            log.warning("Could not create LLM provider for tool loop: %s", exc)
+            return None
 
     def _build_agent_system_prompt(self, objective: str) -> str:
         """Build a system prompt for the tool-calling agent."""
@@ -576,46 +573,80 @@ class AgentManager:
         total_symbols = orch.context.total_symbols if orch else 0
         primary_lang = orch.context.primary_language if orch else "unknown"
 
+        # Include live git status so the agent knows what's already changed
+        # before it starts. Capped to avoid bloating the system prompt.
+        git_status_text = ""
+        try:
+            git_status_text = self.toolbox.git_status()
+            if len(git_status_text) > 800:
+                git_status_text = git_status_text[:800] + "\n... (truncated)"
+        except Exception:
+            pass
+
         parts = [
             "You are **Nala**, an autonomous AI coding agent embedded in a terminal IDE.",
-            "You have real tools to read, write, edit, search, and navigate the codebase.",
-            "You MUST use these tools — do not hallucinate file contents or guess at code.",
+            "You have real tools to read, write, edit, search, and navigate the entire codebase.",
+            "You MUST use tools — never hallucinate file contents or assume what code looks like.",
+            "The developer is experienced; be concise, cite file:line references, and be specific.",
             "",
             f"**Project root:** {self.project_root}",
-            f"**Files indexed:** {total_files}",
-            f"**Symbols extracted:** {total_symbols}",
-            f"**Primary language:** {primary_lang}",
+            f"**Files indexed:** {total_files} | **Symbols:** {total_symbols} | **Language:** {primary_lang}",
             "",
-            "## Available tools",
-            "- `get_cwd()` — Show your current working project root.",
-            "- `read_file(path)` — Read a file (relative or absolute path). ALWAYS read before editing.",
-            "- `write_file(path, content)` — Create a new file or overwrite entirely.",
-            "- `edit_file(path, old_text, new_text)` — Replace exact text in a file.",
-            "  The `old_text` must match verbatim (whitespace-sensitive).",
-            "- `list_files(directory)` — List files and dirs at one level (relative or absolute).",
-            "- `tree(directory, max_depth)` — Recursive directory listing (relative or absolute).",
-            "- `search_code(query)` — Semantic search across indexed code.",
-            "- `run_shell(command, cwd)` — Execute a shell command with optional working directory.",
-            "- `git_status()` — Current git branch, modified files, staged changes.",
-            "- `git_diff()` — Show current uncommitted changes.",
+            "## Tools — use them liberally",
             "",
-            "## Workflow",
-            "1. **Understand** — Start by reading relevant files and exploring structure.",
-            "2. **Plan** — Briefly explain your approach before making changes.",
-            "3. **Execute** — Make changes using edit_file (preferred) or write_file.",
-            "4. **Verify** — Read files back and/or run tests to confirm correctness.",
-            "5. **Summarize** — End with a clear summary of what you changed and why.",
+            "### Navigation & Reading",
+            "- `get_cwd()` — Return the project root (all relative paths are from here).",
+            "- `read_file(path, start_line?, end_line?)` — Read a file with line numbers. Use start_line/end_line for large files.",
+            "- `file_info(path)` — Size, line count, last modified. Check before reading huge files.",
+            "- `list_files(directory?)` — One-level directory listing. Empty string = project root.",
+            "- `tree(directory?, max_depth?)` — Recursive tree. Use to understand layout before diving in.",
+            "- `find_in_files(pattern, directory?, file_glob?, max_results?, ignore_case?)` — Regex grep.",
+            "  Use this to locate any function, class, variable, import, TODO, error message, etc.",
+            "- `search_code(query)` — Semantic/BM25 search of indexed code chunks. For concept searches.",
             "",
-            "## Rules",
-            "- NEVER guess at file contents. Always read_file first.",
-            "- For edit_file, copy the exact text from read_file output for old_text.",
-            "- Prefer small, targeted edit_file calls over full write_file rewrites.",
-            "- If a tool returns an error, adapt your approach — don't retry blindly.",
-            "- Be concise in explanations. The developer is experienced.",
+            "### Writing & Editing",
+            "- `write_file(path, content)` — Create or fully overwrite a file.",
+            "- `edit_file(path, old_text, new_text, replace_all?)` — Replace exact text in a file.",
+            "  **CRITICAL**: `old_text` must match character-for-character including indentation.",
+            "  On mismatch, the tool returns the actual file content so you can correct the match.",
+            "  Always call `read_file` first to get exact text to use as `old_text`.",
+            "- `insert_lines(path, line_number, text)` — Insert text BEFORE line N. Use 999999 to append.",
+            "- `replace_lines(path, start_line, end_line, new_text)` — Replace a line range.",
+            "  Use when you know the line range from read_file output but can't do verbatim match.",
+            "",
+            "### Shell & Verification",
+            "- `run_shell(command, cwd?, timeout?)` — Run any shell command. Timeout up to 300s.",
+            "  Use for: building, testing, linting, checking output, grepping, finding files.",
+            "",
+            "### Git",
+            "- `git_status()` — Branch, modified files, staged changes.",
+            "- `git_diff(path?)` — Unified diff of current changes. Optionally scoped to one file.",
+            "- `git_log(max_commits?)` — Recent commit history.",
+            "- `git_commit(message, add_all?)` — Stage and commit. Use to checkpoint work.",
+            "",
+            "## Standard workflow for any coding task",
+            "1. **Explore** — `tree()` or `list_files()` to understand layout.",
+            "2. **Locate** — `find_in_files(pattern)` to find the exact code you need to change.",
+            "3. **Read** — `read_file(path)` to see exact content and line numbers.",
+            "4. **Edit** — `edit_file(path, old_text, new_text)` using verbatim text from step 3.",
+            "   Or `insert_lines` / `replace_lines` when line numbers are more reliable.",
+            "5. **Verify** — `git_diff()` to review changes, then `run_shell` to build/test.",
+            "6. **Commit** — `git_commit(message)` to save the checkpoint.",
+            "7. **Summarize** — Brief report: what changed, where, and why.",
+            "",
+            "## Critical rules",
+            "- ALWAYS `read_file` before `edit_file`. Guessing `old_text` always fails.",
+            "- If `edit_file` returns 'not found', read the actual file content it shows you and fix your match.",
+            "- Prefer `edit_file` over `write_file` — surgical edits are safer than full rewrites.",
+            "- Use `find_in_files` before searching your memory for function names — they may have changed.",
+            "- If a shell command fails, read the error carefully and adapt. Don't retry blindly.",
+            "- After editing Python, run `run_shell('python -c \"import ast; ast.parse(open(\\'path\\').read())\"')` to check syntax.",
             "",
             "## Project structure",
-            tree_text[:3000],
+            tree_text[:4000],
         ]
+        if git_status_text:
+            parts.append(f"\n## Current git status\n```\n{git_status_text}\n```")
         if brief:
             parts.append(f"\n## Project brief\n{brief[:2000]}")
         if guidance:

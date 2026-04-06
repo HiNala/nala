@@ -76,7 +76,17 @@ class Compactor:
                 return token_estimate_fn(text)
             return len(text) // 4
 
-        tokens_before = sum(_tok(m.get("content", "")) for m in history)
+        def _content_str(m: dict) -> str:
+            c = m.get("content", "")
+            if isinstance(c, list):
+                # Anthropic-style content blocks (tool_use / tool_result)
+                return " ".join(
+                    block.get("content", "") or block.get("text", "")
+                    for block in c if isinstance(block, dict)
+                )
+            return str(c) if c else ""
+
+        tokens_before = sum(_tok(_content_str(m)) for m in history)
 
         # Split history into old (to compact) and recent (to keep verbatim).
         if len(history) <= self._keep_recent:
@@ -106,7 +116,7 @@ class Compactor:
         else:
             compacted_history = recent
 
-        tokens_after = sum(_tok(m.get("content", "")) for m in compacted_history)
+        tokens_after = sum(_tok(_content_str(m)) for m in compacted_history)
 
         strategies = []
         if tier1_applied:
@@ -157,22 +167,65 @@ class Compactor:
 
     @staticmethod
     def _summarise_turns(turns: list[dict]) -> str:
-        """Produce a structured summary of older turns."""
-        user_msgs   = [m["content"] for m in turns if m.get("role") == "user"]
-        asst_msgs   = [m["content"] for m in turns if m.get("role") == "assistant"]
+        """Produce a structured summary of older turns.
+
+        Handles all message roles that appear in the tool-calling loop:
+        - "user"      — developer queries
+        - "assistant" — model replies and tool invocations
+        - "tool"      — tool execution results (the actual work done)
+        """
+        import json as _json
+
+        user_msgs  = [m["content"] for m in turns if m.get("role") == "user"
+                      and isinstance(m.get("content"), str)]
+        asst_msgs  = [m["content"] for m in turns if m.get("role") == "assistant"
+                      and isinstance(m.get("content"), str) and m.get("content")]
+
+        # Extract tool calls made by the assistant (stored as list in content or tool_calls)
+        tool_calls_made: list[str] = []
+        for m in turns:
+            if m.get("role") == "assistant":
+                for tc in m.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "?")
+                    try:
+                        args = _json.loads(fn.get("arguments", "{}"))
+                        # Show the most meaningful arg (path, command, query, pattern)
+                        key_arg = (
+                            args.get("path") or args.get("command") or
+                            args.get("query") or args.get("pattern") or
+                            next(iter(args.values()), "")
+                        )
+                        tool_calls_made.append(f"{name}({str(key_arg)[:60]})")
+                    except Exception:
+                        tool_calls_made.append(name)
+
+        # Extract significant tool results (role="tool")
+        tool_results: list[str] = []
+        for m in turns:
+            if m.get("role") == "tool":
+                content = str(m.get("content", ""))
+                first_line = content.splitlines()[0] if content else ""
+                if first_line and not first_line.startswith("("):
+                    tool_results.append(first_line[:100])
 
         user_summary = (
             " | ".join(m[:120].replace("\n", " ") for m in user_msgs[-5:])
             or "(none)"
         )
         asst_summary = (
-            " | ".join(m[:200].replace("\n", " ") for m in asst_msgs[-3:])
+            " | ".join(m[:150].replace("\n", " ") for m in asst_msgs[-3:])
             or "(none)"
         )
 
-        return (
-            "[COMPACTED CONTEXT — earlier conversation summary]\n"
-            f"User asked about: {user_summary}\n"
-            f"Assistant covered: {asst_summary}\n"
-            "[End of compacted context — recent turns follow]"
-        )
+        parts = [
+            "[COMPACTED CONTEXT — earlier conversation summary]",
+            f"User asked about: {user_summary}",
+            f"Assistant covered: {asst_summary}",
+        ]
+        if tool_calls_made:
+            parts.append(f"Tools used: {', '.join(tool_calls_made[-8:])}")
+        if tool_results:
+            parts.append(f"Key tool outputs: {' | '.join(tool_results[-4:])}")
+        parts.append("[End of compacted context — recent turns follow]")
+        return "\n".join(parts)

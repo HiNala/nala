@@ -86,25 +86,41 @@ class MissionWriter:
     def parse_plan_output(raw_text: str) -> list[MissionFile]:
         """Parse structured LLM planning output into MissionFile objects.
 
-        Expects the LLM to produce a JSON array or a markdown list of missions.
-        Falls back to best-effort markdown parsing when JSON isn't found.
+        Handles three formats (tried in order):
+        1. JSON array, optionally inside a ```json ... ``` code fence
+        2. Bare JSON array anywhere in the text
+        3. Best-effort markdown mission list parsing
         """
         missions: list[MissionFile] = []
 
-        json_match = re.search(r"\[[\s\S]*\]", raw_text)
-        if json_match:
+        # Strip markdown code fences first (models often wrap JSON in ```json)
+        stripped = raw_text
+        fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_text)
+        if fence_match:
+            stripped = fence_match.group(1).strip()
+
+        # Try to find and parse a JSON array in the (possibly stripped) text
+        for candidate in (stripped, raw_text):
+            json_match = re.search(r"\[[\s\S]*\]", candidate)
+            if not json_match:
+                continue
             try:
                 items = json.loads(json_match.group())
                 if isinstance(items, list):
-                    for i, item in enumerate(items):
-                        if isinstance(item, dict):
-                            missions.append(_mission_from_dict(item, index=i + 1))
-                    if missions:
-                        return missions
+                    parsed = [
+                        _mission_from_dict(item, index=i + 1)
+                        for i, item in enumerate(items)
+                        if isinstance(item, dict)
+                    ]
+                    if parsed:
+                        log.info("Parsed %d missions from JSON", len(parsed))
+                        return parsed
             except json.JSONDecodeError:
                 pass
 
         missions = _parse_markdown_missions(raw_text)
+        if missions:
+            log.info("Parsed %d missions from markdown fallback", len(missions))
         return missions
 
 

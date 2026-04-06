@@ -94,13 +94,30 @@ class BackgroundSummary:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _rebuild(self, history: list[dict]) -> None:
-        """Heuristically extract a structured summary from conversation history."""
+        """Heuristically extract a structured summary from conversation history.
+
+        Handles all message roles produced by the tool-calling loop:
+        - "user"      — developer input
+        - "assistant" — model responses and tool invocations
+        - "tool"      — tool execution results (actual work done by the agent)
+        """
+        import json as _json
+
         if not history:
             self._summary = SessionSummary()
             return
 
-        user_messages  = [m["content"] for m in history if m.get("role") == "user"]
-        asst_messages  = [m["content"] for m in history if m.get("role") == "assistant"]
+        # Filter to plain string content only
+        user_messages = [
+            m["content"] for m in history
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        ]
+        asst_messages = [
+            m["content"] for m in history
+            if m.get("role") == "assistant"
+            and isinstance(m.get("content"), str)
+            and m.get("content", "").strip()
+        ]
 
         # Objective: first user message (usually states the goal).
         objective = user_messages[0][:200].replace("\n", " ") if user_messages else ""
@@ -108,19 +125,38 @@ class BackgroundSummary:
         # Current task: most recent user message.
         current_task = user_messages[-1][:200].replace("\n", " ") if user_messages else ""
 
-        # Completed work: extract action-like phrases from assistant messages.
+        # Completed work: pull from assistant text AND successful tool calls.
         completed: list[str] = []
+
+        # From assistant prose
         for msg in asst_messages:
             for line in msg.splitlines():
                 line = line.strip()
                 if any(line.lower().startswith(kw) for kw in
                        ("applied", "created", "edited", "refactored", "fixed",
-                        "added", "removed", "updated", "changed")):
+                        "added", "removed", "updated", "changed", "wrote", "deleted")):
                     completed.append(line[:120])
                     if len(completed) >= 10:
                         break
 
-        # Key decisions: lines starting with "decided", "using", "chose", etc.
+        # From tool calls: summarise what the agent actually did
+        for m in history:
+            if m.get("role") == "assistant":
+                for tc in m.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "")
+                    if name in ("write_file", "edit_file", "insert_lines",
+                                "replace_lines", "git_commit"):
+                        try:
+                            args = _json.loads(fn.get("arguments", "{}"))
+                            path = args.get("path", args.get("message", ""))
+                            completed.append(f"{name}: {path}"[:100])
+                        except Exception:
+                            completed.append(name)
+                    if len(completed) >= 12:
+                        break
+
+        # Key decisions from assistant text
         decisions: list[str] = []
         for msg in asst_messages:
             for line in msg.splitlines():
@@ -130,6 +166,20 @@ class BackgroundSummary:
                     decisions.append(line[:120])
                     if len(decisions) >= 5:
                         break
+
+        # Files touched (from tool results and tool calls)
+        files_seen: list[str] = []
+        for m in history:
+            if m.get("role") == "assistant":
+                for tc in m.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    try:
+                        args = _json.loads(fn.get("arguments", "{}"))
+                        path = args.get("path", "")
+                        if path and path not in files_seen:
+                            files_seen.append(path)
+                    except Exception:
+                        pass
 
         # Next steps: lines starting with "next", "todo", "still need", etc.
         next_steps: list[str] = []
@@ -143,6 +193,10 @@ class BackgroundSummary:
                     if len(next_steps) >= 5:
                         break
 
+        # Inject files touched into decisions for context continuity
+        if files_seen:
+            decisions.insert(0, f"Files touched: {', '.join(files_seen[-6:])}")
+
         self._summary = SessionSummary(
             objective=objective,
             completed=completed,
@@ -153,6 +207,6 @@ class BackgroundSummary:
             updated_at=time.monotonic(),
         )
         log.debug(
-            "BackgroundSummary rebuilt: %d turns, %d completed, %d decisions",
-            len(history), len(completed), len(decisions),
+            "BackgroundSummary rebuilt: %d turns, %d completed, %d decisions, %d files",
+            len(history), len(completed), len(decisions), len(files_seen),
         )

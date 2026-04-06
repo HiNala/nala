@@ -1,12 +1,17 @@
 """Chunk embedder and retriever using BM25 + optional vector store.
 
 Strategy (in order of preference):
-  1. OpenAI text-embedding-3-small  (if OPENAI_API_KEY is set)
-  2. Voyage voyage-code-2           (if ANTHROPIC_API_KEY is set, via Voyage)
-  3. BM25 keyword search            (always available, no network required)
+  1. OpenAI text-embedding-3-small  (if OPENAI_API_KEY is set AND NALA_VECTOR_INDEX=1)
+  2. Voyage voyage-code-2           (if ANTHROPIC_API_KEY is set AND NALA_VECTOR_INDEX=1)
+  3. BM25 keyword search            (always available, no network required — default)
 
-ChromaDB is used as the embedded vector store when embeddings are available.
-BM25 runs fully in-process from rank_bm25.
+Vector indexing is OFF by default.  It loads the ChromaDB HNSW index into the
+orchestrator process RAM, which grows to 150-400 MB on large codebases and
+causes hangs when the Voyage/OpenAI embedding API is slow.  BM25 is fast,
+runs entirely in-process with no API calls, and is already high-quality for
+code search.
+
+Set NALA_VECTOR_INDEX=1 in your .env to opt into vector embeddings.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 
 from .splitter import Chunk
@@ -22,6 +28,10 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_TOP_K = 20
 _CHROMA_COLLECTION = "nala_chunks"
+
+# Maximum chunks to vector-embed even when NALA_VECTOR_INDEX=1.
+# Above this threshold we fall back to BM25 to avoid excessive RAM / API cost.
+_VECTOR_CHUNK_LIMIT = 3_000
 
 
 class _BM25Backend:
@@ -85,15 +95,33 @@ class Embedder:
         self._chroma_collection = None
         self._embed_fn = None
         self._chunks: list[Chunk] = []
+        # Cancel flag: set by cancel() to abort an in-progress vector build.
+        self._cancel = threading.Event()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    def cancel(self) -> None:
+        """Signal any in-progress vector build to stop at the next batch boundary."""
+        self._cancel.set()
+
     def build(self, chunks: list[Chunk], source_file_count: int = 0) -> None:
         """Index all chunks. Call after a scan/index completes."""
+        self._cancel.clear()
         self._chunks = chunks
         self._source_file_count = source_file_count
         self._bm25.build(chunks)
-        self._try_build_vector_index(chunks)
+        # Vector indexing is opt-in: set NALA_VECTOR_INDEX=1 to enable.
+        # It is off by default because the in-process ChromaDB HNSW index and
+        # synchronous embedding API calls consume 150-400 MB of RAM on large
+        # codebases and can block the event loop for minutes.
+        if os.getenv("NALA_VECTOR_INDEX", "0").strip() == "1":
+            if len(chunks) > _VECTOR_CHUNK_LIMIT:
+                log.warning(
+                    "Vector index skipped: %d chunks exceeds limit %d — using BM25.",
+                    len(chunks), _VECTOR_CHUNK_LIMIT,
+                )
+            else:
+                self._try_build_vector_index(chunks)
         log.info("Embedder indexed %d chunks from %d files (vector=%s)",
                  len(chunks), source_file_count, self._chroma_collection is not None)
 
@@ -142,6 +170,9 @@ class Embedder:
                 pass
             col = client.create_collection(_CHROMA_COLLECTION)
             for i in range(0, len(chunks), 50):
+                if self._cancel.is_set():
+                    log.info("Vector index build cancelled at batch %d/%d", i, len(chunks))
+                    return
                 batch = chunks[i : i + 50]
                 texts = [c.content[:4000] for c in batch]
                 col.add(

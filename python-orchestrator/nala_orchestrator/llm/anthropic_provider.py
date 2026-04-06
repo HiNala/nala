@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .provider import BaseLLMProvider, LLMMessage, LLMResponse
 
 if TYPE_CHECKING:
     from nala_orchestrator.config import Config
+
+log = logging.getLogger("nala.anthropic")
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -53,6 +57,138 @@ class AnthropicProvider(BaseLLMProvider):
             output_tokens=response.usage.output_tokens,
             finish_reason=response.stop_reason or "stop",
         )
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict],
+        system_prompt: str | None = None,
+        max_tokens: int = 4096,
+    ) -> dict:
+        """Single-round chat that may return tool_calls.
+
+        Converts OpenAI-format tool schemas and message history to Anthropic's
+        tool_use format, then normalises the response back to the OpenAI-compatible
+        dict expected by tool_executor.run_tool_loop.
+        """
+        # Convert OpenAI-format tool definitions → Anthropic format
+        anthropic_tools = []
+        for tool in tools:
+            if tool.get("type") == "function":
+                fn = tool["function"]
+                anthropic_tools.append({
+                    "name": fn["name"],
+                    "description": fn.get("description", ""),
+                    "input_schema": fn.get(
+                        "parameters",
+                        {"type": "object", "properties": {}, "required": []},
+                    ),
+                })
+
+        # Convert message history (which may contain tool results) → Anthropic format
+        anthropic_messages = self._convert_tool_messages(messages)
+
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": anthropic_messages,
+        }
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        if anthropic_tools:
+            kwargs["tools"] = anthropic_tools
+
+        log.debug("Anthropic tool call: model=%s tools=%d msgs=%d",
+                  self.model, len(anthropic_tools), len(anthropic_messages))
+
+        response = await self._client.messages.create(**kwargs)
+
+        # Normalise response → OpenAI-compatible dict
+        result: dict[str, Any] = {"role": "assistant", "content": ""}
+        tool_calls: list[dict] = []
+        text_parts: list[str] = []
+
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append({
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input),
+                    },
+                })
+
+        result["content"] = "".join(text_parts)
+        if tool_calls:
+            result["tool_calls"] = tool_calls
+
+        log.debug("Anthropic response: tool_calls=%d text=%d chars",
+                  len(tool_calls), len(result["content"]))
+        return result
+
+    @staticmethod
+    def _convert_tool_messages(messages: list[dict[str, Any]]) -> list[dict]:
+        """Convert OpenAI-style message history (including tool results) to Anthropic format.
+
+        OpenAI uses role="tool" + tool_call_id for tool results.
+        Anthropic uses role="user" + content=[{"type":"tool_result",...}].
+
+        Critical: Anthropic requires strictly alternating user/assistant roles.
+        When an assistant emits multiple parallel tool calls, all their results
+        arrive as consecutive role="tool" messages that must be batched into a
+        SINGLE role="user" message with multiple tool_result blocks.
+        """
+        out: list[dict] = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "tool":
+                result_block = {
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": str(content),
+                }
+                # Batch consecutive tool results into the same user message
+                if out and out[-1]["role"] == "user" and isinstance(out[-1]["content"], list):
+                    out[-1]["content"].append(result_block)
+                else:
+                    out.append({"role": "user", "content": [result_block]})
+
+            elif role == "assistant" and msg.get("tool_calls"):
+                # Assistant turn that invoked tools — emit as a list of content blocks
+                blocks: list[dict] = []
+                if content:
+                    blocks.append({"type": "text", "text": str(content)})
+                for tc in msg.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    raw_args = fn.get("arguments", "{}")
+                    try:
+                        parsed = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "input": parsed,
+                    })
+                out.append({"role": "assistant", "content": blocks})
+
+            else:
+                # Regular user or assistant message
+                if (out and out[-1]["role"] == role
+                        and isinstance(out[-1]["content"], str)):
+                    # Merge consecutive same-role plain-text messages
+                    out[-1]["content"] += "\n\n" + str(content)
+                else:
+                    out.append({"role": role, "content": str(content)})
+
+        return out
 
     async def stream_chat(
         self,

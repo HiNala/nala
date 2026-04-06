@@ -138,19 +138,38 @@ class SessionManager:
 
     # ── Conversation logging ───────────────────────────────────────────────
 
-    def append_turn(self, role: str, content: str) -> None:
+    def append_turn(
+        self,
+        role: str,
+        content: str,
+        *,
+        tool_call_id: str | None = None,
+        tool_calls: list[dict] | None = None,
+    ) -> None:
         """
         Atomically append one conversation turn to conversation.jsonl.
 
         Uses write-to-tmp-then-rename to avoid corruption on crash.
+
+        Args:
+            role:          "user", "assistant", or "tool"
+            content:       Text content of the turn.
+            tool_call_id:  For role="tool" turns — the ID of the tool call
+                           this result belongs to (OpenAI function-calling format).
+            tool_calls:    For role="assistant" turns that contain tool invocations
+                           — the list of tool_call dicts so history can be replayed.
         """
         if not self._current:
             return
-        turn = {
+        turn: dict[str, Any] = {
             "role": role,
             "content": content,
             "timestamp": datetime.now(UTC).isoformat(),
         }
+        if tool_call_id is not None:
+            turn["tool_call_id"] = tool_call_id
+        if tool_calls is not None:
+            turn["tool_calls"] = tool_calls
         jsonl_path = self._current / "conversation.jsonl"
         line = json.dumps(turn, ensure_ascii=False) + "\n"
 

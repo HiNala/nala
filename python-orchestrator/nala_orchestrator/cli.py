@@ -118,6 +118,10 @@ _action_executor: ActionExecutor | None = None
 # Project-level embedder (built lazily on first index_context with symbols).
 _embedder: Embedder | None = None
 
+# Handle to the currently running background index build task so we can cancel
+# it before starting a new one (prevents ghost threads accumulating RAM).
+_build_task: asyncio.Task | None = None
+
 # Task ledger — created on IPC startup, persists within the session.
 _task_ledger: TaskLedger | None = None
 
@@ -574,10 +578,13 @@ async def handle_request(
                     "index_context: building chunks for %d symbols (background)",
                     len(syms_list),
                 )
+
+                # Create a fresh Embedder so cancel() only affects this build.
+                new_emb = Embedder(root_str)
+
                 try:
                     def _do_build() -> Embedder:
                         t1 = _t.monotonic()
-                        emb = Embedder(root_str)
                         splitter = ChunkSplitter()
                         chunks = splitter.split_all(root_str, syms_list)
                         t2 = _t.monotonic()
@@ -585,20 +592,28 @@ async def handle_request(
                             "split_all: %d chunks in %.1fs",
                             len(chunks), t2 - t1,
                         )
-                        emb.build(chunks, source_file_count=total)
+                        new_emb.build(chunks, source_file_count=total)
                         t3 = _t.monotonic()
                         log.warning(
                             "embedder.build: %.1fs (total %.1fs)",
                             t3 - t2, t3 - t1,
                         )
-                        return emb
+                        return new_emb
 
+                    # 120 s is enough for BM25 on the largest codebases.
+                    # Vector index (opt-in) adds time but is bounded by chunk cap.
+                    # asyncio.wait_for cancels the *task*; the thread may linger
+                    # briefly but new_emb.cancel() signals it to stop at the next
+                    # batch boundary so it releases memory promptly.
                     emb = await asyncio.wait_for(
                         asyncio.to_thread(_do_build),
-                        timeout=600,
+                        timeout=120,
                     )
                     _embedder = emb
                     agent.set_embedder(emb)
+                    # Invalidate the static prompt cache so the next query picks
+                    # up the fresh file tree / project brief.
+                    agent.invalidate_static_cache()
                     elapsed = _t.monotonic() - _t0
                     log.warning(
                         "index_context: chunks built in %.1fs", elapsed,
@@ -612,10 +627,15 @@ async def handle_request(
                         "type": "system_message",
                         "text": msg,
                     })
-                except TimeoutError:
-                    log.error(
-                        "index_context: chunk build timed out (600s)",
-                    )
+                except asyncio.TimeoutError:
+                    # Signal the thread to stop at its next batch checkpoint.
+                    new_emb.cancel()
+                    log.error("index_context: chunk build timed out (120s)")
+                except asyncio.CancelledError:
+                    # Task was cancelled because a new index_context arrived.
+                    new_emb.cancel()
+                    log.info("index_context: build superseded by newer index")
+                    raise
                 except Exception as e:
                     log.error("index_context: chunk build failed: %s", e)
 
@@ -638,7 +658,17 @@ async def handle_request(
                 except Exception as e:
                     log.debug("Graph sync skipped: %s", e)
 
-            asyncio.create_task(
+            # Cancel any previous build before starting the new one.
+            # This prevents ghost threads accumulating embeddings in RAM when
+            # the Rust indexer sends rapid successive index_context messages.
+            global _build_task
+            if _build_task is not None and not _build_task.done():
+                log.info("index_context: cancelling previous build task")
+                if _embedder is not None:
+                    _embedder.cancel()
+                _build_task.cancel()
+
+            _build_task = asyncio.create_task(
                 _background_build(
                     str(root), syms, total_files, normalised_symbols,
                 ),
@@ -1156,7 +1186,7 @@ async def handle_request(
             write_response({"id": req_id, "type": "error", "text": "Missing objective"})
             return
         global _lead_agent
-        _lead_agent = LeadAgent(config, root)
+        _lead_agent = LeadAgent(config, root, embedder=_embedder)
         try:
             async for chunk in _lead_agent.stream_run(objective):
                 write_response({"id": req_id, "type": "chunk", "text": chunk})

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from nala_orchestrator.chunking.embedder import Embedder
     from nala_orchestrator.config import Config
 
 from .decomposer import TaskDecomposer, TaskPlan
@@ -64,9 +65,15 @@ class TeamStatus:
 class LeadAgent:
     """Orchestrates a team of worker agents for a complex objective."""
 
-    def __init__(self, config: Config, project_root: Path) -> None:
+    def __init__(
+        self,
+        config: Config,
+        project_root: Path,
+        embedder: Embedder | None = None,
+    ) -> None:
         self._config = config
         self._root = project_root
+        self._embedder = embedder
         self._task_list = SharedTaskList(project_root)
         self._locks = FileLockRegistry()
         self._bus = MessageBus()
@@ -76,8 +83,32 @@ class LeadAgent:
             locks=self._locks,
             bus=self._bus,
             max_concurrent=3,
+            project_root=project_root,
+            embedder=embedder,
+            project_brief=self._load_project_brief(),
         )
         self._status = TeamStatus(objective="")
+
+    def set_embedder(self, embedder: Embedder) -> None:
+        """Update the shared embedder after an index rebuild."""
+        self._embedder = embedder
+        self._spawner.set_embedder(embedder)
+
+    def _load_project_brief(self) -> str:
+        """Load a short project description for worker context injection."""
+        for candidate in (
+            self._root / ".nala" / "agent" / "project-brief.md",
+            self._root / "README.md",
+            self._root / "readme.md",
+        ):
+            if candidate.exists():
+                try:
+                    text = candidate.read_text(encoding="utf-8", errors="replace").strip()
+                    if len(text) > 100:
+                        return text[:600]
+                except OSError:
+                    pass
+        return ""
 
     # ── Public API ────────────────────────────────────────────────────────────
 

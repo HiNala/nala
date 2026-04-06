@@ -81,6 +81,26 @@ class BaseLLMProvider(ABC):
         """Stream a response token-by-token. Yields text chunks."""
         ...
 
+    async def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system_prompt: str | None = None,
+        max_tokens: int = 4096,
+    ) -> dict:
+        """Single-round chat that may return tool_calls.
+
+        All concrete providers override this.  The default raises so that
+        a missing implementation is caught at runtime with a clear message.
+
+        Returns an OpenAI-compatible assistant message dict:
+          {"role": "assistant", "content": "...", "tool_calls": [...]}
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement chat_with_tools. "
+            "Implement it or use a provider that supports tool calling."
+        )
+
     def health_check(self) -> bool:
         """Return True if the provider appears to be configured correctly."""
         return bool(self.config.active_api_key() or self.config.llm_provider == "ollama")
