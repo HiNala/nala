@@ -237,7 +237,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     if show_scroll_hint && clamped_offset > 0 {
         let hint = Line::from(Span::styled(
             format!(
-                "  ── {} more lines (Shift+\u{2191}/\u{2193}, PgUp/PgDn, or mouse wheel) ──",
+                "  -- {} lines above (Up/Dn or Shift+Up/Dn to scroll, Esc to snap bottom) --",
                 clamped_offset,
             ),
             Style::default().fg(theme::GRAY),

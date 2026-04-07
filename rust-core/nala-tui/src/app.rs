@@ -550,6 +550,7 @@ impl App {
             return;
         }
 
+        // Shift+Up/Down: always scroll (high priority — checked before Ctrl and plain keys)
         if key.modifiers.contains(KeyModifiers::SHIFT) {
             match key.code {
                 Up => {
@@ -598,6 +599,17 @@ impl App {
                     let left = word_boundary_left(&self.input, self.cursor_pos);
                     self.input.drain(left..self.cursor_pos);
                     self.cursor_pos = left;
+                    return;
+                }
+                // Ctrl+Home / Ctrl+End: jump to top/bottom of scroll
+                Home => {
+                    self.scroll_offset = usize::MAX; // clamped to max_scroll at render
+                    self.scroll_locked_to_bottom = false;
+                    return;
+                }
+                End => {
+                    self.scroll_offset = 0;
+                    self.scroll_locked_to_bottom = true;
                     return;
                 }
                 _ => {}
@@ -672,10 +684,35 @@ impl App {
                     self.scroll_locked_to_bottom = true;
                 }
             }
-            Up => self.history_up(),
-            Down => self.history_down(),
+            // Up/Down: scroll when viewing history, navigate command history otherwise.
+            // This prevents "scrolling becomes history cycling" confusion: when the user
+            // has scrolled up to read content, Up/Down continue scrolling. When at the
+            // bottom (normal entry mode), Up/Down cycle command history as expected.
+            Up => {
+                if self.scroll_offset > 0 {
+                    self.scroll_offset = self.scroll_offset.saturating_add(3);
+                    self.scroll_locked_to_bottom = false;
+                } else {
+                    self.history_up();
+                }
+            }
+            Down => {
+                if self.scroll_offset > 0 {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                    if self.scroll_offset == 0 {
+                        self.scroll_locked_to_bottom = true;
+                    }
+                } else {
+                    self.history_down();
+                }
+            }
             Esc => {
-                if self.mode == AppMode::Analyzing {
+                // First Esc when scrolled up: snap back to bottom.
+                // Subsequent Esc (or Esc at bottom): cancel stream / clear input.
+                if self.scroll_offset > 0 {
+                    self.scroll_offset = 0;
+                    self.scroll_locked_to_bottom = true;
+                } else if self.mode == AppMode::Analyzing {
                     self.mode = AppMode::Ready;
                     self.streaming_response = None;
                     self.push_message(Message {
