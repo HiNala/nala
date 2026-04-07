@@ -191,17 +191,30 @@ class AgentOrchestrator:
         self._graph_ctx: GraphContextProvider | None = None
         self._knowledge_base: KnowledgeBase | None = None
         self._token_counter = TokenCounter(model=getattr(config, "llm_model", "default"))
-        self._compaction_cfg = CompactionConfig()
+        self._compaction_cfg = CompactionConfig.from_project_root(config.project_root)
         self._detector = OpportunityDetector()
         self._compactor = Compactor(keep_recent=self._compaction_cfg.keep_recent_turns)
         self._bg_summary = BackgroundSummary()
         # Cached static prompt parts (file tree + brief + commands).
         # Rebuilt at most once every 30 s — avoids redundant filesystem walks
         # when _maybe_compact and stream_query both call build_system_prompt.
-        self._static_parts_cache: tuple[str, str, str] | None = None
+        self._static_parts_cache: tuple[str, str, str, str] | None = None
         self._static_parts_ts: float = 0.0
         _STATIC_CACHE_TTL = 30.0  # seconds
         self._STATIC_CACHE_TTL = _STATIC_CACHE_TTL
+
+    # ── Index context ─────────────────────────────────────────────────────
+
+    def update_index_context(
+        self,
+        total_files: int = 0,
+        total_symbols: int = 0,
+        primary_language: str = "unknown",
+    ) -> None:
+        """Update index stats on the conversation context."""
+        self.context.total_files = total_files
+        self.context.total_symbols = total_symbols
+        self.context.primary_language = primary_language
 
     # ── File tree ──────────────────────────────────────────────────────────
 
@@ -299,7 +312,6 @@ class AgentOrchestrator:
         import sys as _sys
 
         from ..git_ops import (
-            branch_info,
             current_branch,
             is_git_repo,
             recent_commits,
@@ -314,8 +326,11 @@ class AgentOrchestrator:
         os_ver  = platform.version()[:60]    # truncate long Windows build strings
         py_ver  = f"{_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}"
         shell   = "PowerShell / cmd" if os_name == "Windows" else "bash/zsh"
+        shell_syntax = "PowerShell" if os_name == "Windows" else "bash"
         lines.append(f"- **OS:** {os_name} {os_ver}")
-        lines.append(f"- **Shell:** {shell} (use {('PowerShell' if os_name == 'Windows' else 'bash')} syntax in commands)")
+        lines.append(
+            f"- **Shell:** {shell} (use {shell_syntax} syntax in commands)"
+        )
         lines.append(f"- **Python:** {py_ver}")
 
         # Git state
@@ -530,11 +545,52 @@ class AgentOrchestrator:
 
     def get_context_usage(self) -> TokenUsage:
         """Return the current token usage breakdown."""
-        system = self.build_system_prompt()
+        query = self.context.messages[-1].content if self.context.messages else ""
+        retrieved = self._retrieve_context(query) if query else ""
+        file_tree, project_brief, cmds, env_ctx = self._get_static_parts()
+        system = SYSTEM_PROMPT_TEMPLATE.format(
+            project_name=Path(self.context.project_root).name,
+            project_root=self.context.project_root,
+            total_files=self.context.total_files,
+            total_symbols=self.context.total_symbols,
+            primary_language=self.context.primary_language,
+            project_brief=project_brief,
+            environment_context=env_ctx,
+            file_tree=file_tree,
+            retrieved_context="(counted separately in context usage)",
+        )
+        if cmds:
+            system = system + "\n\n" + cmds
+
+        context_blocks: list[str] = []
+        injections = self.context.get_system_injections()
+        if injections:
+            context_blocks.append(injections)
+        if retrieved and retrieved != "(no relevant code found for this query)":
+            context_blocks.append(retrieved)
+        if self._graph_ctx and self._graph_ctx.is_available() and query:
+            try:
+                graph_block = self._graph_ctx.context_for_query(query, max_chars=3000)
+                if graph_block:
+                    context_blocks.append(graph_block)
+            except Exception as exc:
+                logger.debug("Graph context usage measurement failed: %s", exc)
+        if self._knowledge_base and query:
+            try:
+                kb_block = self._knowledge_base.load_for_context(query, max_chars=2000)
+                if kb_block:
+                    context_blocks.append(kb_block)
+            except Exception as exc:
+                logger.debug("Knowledge context usage measurement failed: %s", exc)
+        summary = self._bg_summary.get_summary_text()
+        if summary and summary != "(no session summary yet)":
+            context_blocks.append(summary)
+
         history = [{"role": m.role, "content": m.content} for m in self.context.messages]
         return self._token_counter.measure_conversation(
             system_prompt=system,
             history=history,
+            retrieved_context="\n\n".join(context_blocks),
         )
 
     def get_context_breakdown_text(self) -> str:
@@ -550,6 +606,7 @@ class AgentOrchestrator:
         new_history, result = self._compactor.compact(
             history,
             token_estimate_fn=lambda t: self._token_counter.count(t),
+            focus=focus,
         )
 
         # Rebuild message list from compacted history.
@@ -563,6 +620,24 @@ class AgentOrchestrator:
 
         return result.summary
 
+    def _update_detector_from_response(self, assistant_text: str) -> None:
+        lowered = assistant_text.lower()
+        completion_markers = (
+            "implemented",
+            "applied",
+            "fixed",
+            "updated",
+            "completed",
+            "done",
+            "finished",
+            "refactored",
+            "added",
+            "created",
+            "saved",
+        )
+        if any(marker in lowered for marker in completion_markers):
+            self._detector.mark_subtask_complete()
+
     def _rough_token_estimate(self) -> int:
         """Fast token estimate — safe to call on the asyncio event loop.
 
@@ -571,87 +646,19 @@ class AgentOrchestrator:
         to compact, not for billing or display.
         """
         # Fixed overhead: system prompt template + file tree + project brief.
-        base_tokens = 4_000
-        msg_tokens = sum(len(m.content) for m in self.context.messages) // 4
-        return base_tokens + msg_tokens
-
-    def _maybe_compact(self, query: str) -> None:
-        """Auto-compact if the detector says it is time.
-
-        Uses only a cheap char-count estimate — never BM25 retrieval — so it
-        is safe to call synchronously from an async generator without blocking
-        the event loop.  This avoids the double build_system_prompt (sync +
-        threaded) that caused RAM spikes and first-chunk timeouts with OpenAI.
-        """
-        history_len = len(self.context.messages)
-        if history_len < self._compaction_cfg.min_turns_before_compact:
-            return
-        # Fast estimate: no BM25, no file I/O, no event-loop blocking.
-        est_tokens = self._rough_token_estimate()
-        max_tokens = getattr(self.config, "max_context_tokens", 100_000)
-        utilization_pct = min((est_tokens / max_tokens) * 100.0, 100.0)
-        should = self._detector.should_compact_now(
-            utilization_pct=utilization_pct,
-            history_len=history_len,
-            min_turns=self._compaction_cfg.min_turns_before_compact,
-        )
-        if should:
-            logger.info(
-                "Auto-compacting context at ~%.1f%% utilization (estimated)",
-                utilization_pct,
-            )
-            self.compact_now()
-
-    def update_index_context(
-        self,
-        total_files: int,
-        total_symbols: int,
-        primary_language: str = "",
-    ) -> None:
-        """Update the context with fresh index data."""
-        self.context.total_files = total_files
-        self.context.total_symbols = total_symbols
-        if primary_language:
-            self.context.primary_language = primary_language
-        if self._session:
-            self._session.update_meta(
-                total_files=total_files,
-                total_symbols=total_symbols,
-            )
-
-    async def query(self, user_message: str) -> str:
-        """Send a query and return the complete response."""
-        if not self.config.has_llm():
-            return (
-                "No LLM provider configured. "
-                "Add ANTHROPIC_API_KEY (or OPENAI_API_KEY, GOOGLE_API_KEY) to your .env file."
-            )
-
-        session = self.ensure_session()
-        self._detector.mark_user_message()
-        self._maybe_compact(user_message)
-        self.context.add_user(user_message)
-        self.context.trim_to_limit()
-        session.append_turn("user", user_message)
-
-        try:
-            provider = self._get_provider()
-            response = await provider.chat(
-                messages=self.context.messages,
-                system_prompt=self.build_system_prompt(user_message),
-            )
-            self.context.add_assistant(response.content)
-            session.append_turn("assistant", response.content)
-            self._detector.mark_assistant_response()
-            history = [{"role": m.role, "content": m.content} for m in self.context.messages]
-            self._bg_summary.on_turn(history)
-            return response.content
-        except Exception as e:
-            logger.error("LLM query failed: %s", e)
-            error_msg = f"Error: {e}"
-            self.context.add_assistant(error_msg)
-            session.append_turn("assistant_error", error_msg)
-            return error_msg
+        total_chars = 2500
+        for m in self.context.messages:
+            try:
+                total_chars += len(str(m.content))
+            except Exception:
+                pass
+        injections = self.context.get_system_injections()
+        if injections:
+            total_chars += len(injections)
+        summary = self._bg_summary.get_summary_text()
+        if summary and summary != "(no session summary yet)":
+            total_chars += len(summary)
+        return max(1, total_chars // 4)
 
     async def stream_query_with_actions(self, user_message: str) -> AsyncIterator[str]:
         """
@@ -667,7 +674,7 @@ class AgentOrchestrator:
             return
 
         session = self.ensure_session()
-        self._detector.mark_user_message()
+        self._detector.mark_user_message(user_message)
         self._maybe_compact(user_message)
         self.context.add_user(user_message)
         self.context.trim_to_limit()
@@ -679,9 +686,18 @@ class AgentOrchestrator:
                 _asyncio.to_thread(self.build_system_prompt, user_message),
                 timeout=10.0,
             )
-        except (_asyncio.TimeoutError, Exception) as exc:
+        except TimeoutError as exc:
+            logger.warning("build_system_prompt timed out in stream_query_with_actions: %s", exc)
+            base_prompt = (
+                "You are Nala, an AI coding assistant. "
+                f"Project: {self.context.project_root}"
+            )
+        except Exception as exc:
             logger.warning("build_system_prompt error in stream_query_with_actions: %s", exc)
-            base_prompt = f"You are Nala, an AI coding assistant. Project: {self.context.project_root}"
+            base_prompt = (
+                "You are Nala, an AI coding assistant. "
+                f"Project: {self.context.project_root}"
+            )
         action_system = base_prompt + ACTION_PROMPT_EXTENSION
         full_response: list[str] = []
         had_error = False
@@ -711,6 +727,7 @@ class AgentOrchestrator:
             turn_type = "assistant_error" if had_error else "assistant"
             session.append_turn(turn_type, assistant_text)
             self._detector.mark_assistant_response()
+            self._update_detector_from_response(assistant_text)
             history = [{"role": m.role, "content": m.content} for m in self.context.messages]
             self._bg_summary.on_turn(history)
 
@@ -733,7 +750,7 @@ class AgentOrchestrator:
             return
 
         session = self.ensure_session()
-        self._detector.mark_user_message()
+        self._detector.mark_user_message(user_message)
         # Only compact when truly needed — avoids an extra build_system_prompt call
         # on every query which was blocking the event loop.
         self._maybe_compact(user_message)
@@ -748,12 +765,18 @@ class AgentOrchestrator:
                 _asyncio.to_thread(self.build_system_prompt, user_message),
                 timeout=10.0,
             )
-        except _asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("build_system_prompt timed out — using minimal prompt")
-            system_prompt = f"You are Nala, an AI coding assistant. Project: {self.context.project_root}"
+            system_prompt = (
+                "You are Nala, an AI coding assistant. "
+                f"Project: {self.context.project_root}"
+            )
         except Exception as exc:
             logger.error("build_system_prompt failed: %s", exc)
-            system_prompt = f"You are Nala, an AI coding assistant. Project: {self.context.project_root}"
+            system_prompt = (
+                "You are Nala, an AI coding assistant. "
+                f"Project: {self.context.project_root}"
+            )
 
         full_response: list[str] = []
         had_error = False
@@ -776,5 +799,6 @@ class AgentOrchestrator:
             turn_type = "assistant_error" if had_error else "assistant"
             session.append_turn(turn_type, assembled)
             self._detector.mark_assistant_response()
+            self._update_detector_from_response(assembled)
             history = [{"role": m.role, "content": m.content} for m in self.context.messages]
             self._bg_summary.on_turn(history)

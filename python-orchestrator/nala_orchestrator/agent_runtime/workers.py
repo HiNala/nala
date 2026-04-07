@@ -59,6 +59,11 @@ class WorkerInfo:
     result_summary: str = ""
     files_touched: list[str] = field(default_factory=list)
     worktree_path: str = ""
+    task_id: str = ""
+    strategy: str = ""
+    window_name: str = ""
+    log_file: str = ""
+    working_dir: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -74,6 +79,11 @@ class WorkerInfo:
             "result_summary": self.result_summary,
             "files_touched": self.files_touched,
             "worktree_path": self.worktree_path,
+            "task_id": self.task_id,
+            "strategy": self.strategy,
+            "window_name": self.window_name,
+            "log_file": self.log_file,
+            "working_dir": self.working_dir,
         }
 
     @classmethod
@@ -92,7 +102,15 @@ class WorkerInfo:
             WorkerStatus.FAILED: "✗",
             WorkerStatus.CANCELLED: "○",
         }.get(self.status, "?")
-        return f"{icon} [{self.worker_id}] {self.role.value}: {self.label or self.objective[:40]}"
+        location = ""
+        if self.strategy and self.window_name:
+            location = f"  {self.strategy}:{self.window_name}"
+        elif self.strategy and self.log_file:
+            location = f"  {self.strategy}:{self.log_file}"
+        return (
+            f"{icon} [{self.worker_id}] {self.role.value}: "
+            f"{self.label or self.objective[:40]}{location}"
+        )
 
 
 class WorkerRegistry:

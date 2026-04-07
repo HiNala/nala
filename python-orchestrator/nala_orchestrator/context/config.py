@@ -7,7 +7,12 @@ utilisation.  Claude Code compacts at ~64%; Nala targets a similar sweet spot.
 
 from __future__ import annotations
 
+import logging
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,9 +49,25 @@ class CompactionConfig:
             min_turns_before_compact=int(data.get("min_turns_before_compact", 4)),
         )
 
+    @classmethod
+    def from_project_root(cls, project_root: Path) -> CompactionConfig:
+        path = project_root / ".nala" / "config.toml"
+        if not path.exists():
+            return cls()
+        try:
+            with path.open("rb") as f:
+                raw = tomllib.load(f)
+        except Exception as exc:
+            log.warning("Failed to parse compaction config %s: %s", path, exc)
+            return cls()
+        section = raw.get("context", raw)
+        if not isinstance(section, dict):
+            return cls()
+        return cls.from_dict(section)
+
     def level_for(self, utilization_pct: float) -> str:
         """Return 'normal', 'soft', 'hard', or 'critical'."""
-        u = utilization_pct / 100.0
+        u = utilization_pct if utilization_pct <= 1.0 else utilization_pct / 100.0
         if u >= self.critical_threshold:
             return "critical"
         if u >= self.hard_threshold:

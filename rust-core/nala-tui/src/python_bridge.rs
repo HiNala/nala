@@ -98,6 +98,8 @@ pub enum BridgeRequest {
     MemoryForget { target: String },
     /// Save a fact to the knowledge base.
     MemorySave { fact: String },
+    /// Rebuild project knowledge from recent session memories.
+    MemoryRefresh,
     /// Update orchestrator-side index context.
     IndexContext {
         total_files: usize,
@@ -163,6 +165,10 @@ pub enum BridgeRequest {
     SettingsShow,
     SettingsSet { key: String, value: String },
     SettingsSetup,
+    // ── Code Review (M27) ─────────────────────────────────────────
+    ReviewCodebase { mode: String, target: String, output_format: String, severity: String },
+    // ── Escape hatch: send arbitrary JSON to Python ───────────────
+    CustomJson { payload: serde_json::Value },
 }
 
 // ── PythonBridge ───────────────────────────────────────────────────────────
@@ -394,6 +400,14 @@ impl PythonBridge {
     pub async fn memory_save(&self, fact: String) -> Result<()> {
         self.request_tx
             .send(BridgeRequest::MemorySave { fact })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    /// Rebuild project knowledge from recent session memories.
+    pub async fn memory_refresh(&self) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::MemoryRefresh)
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
@@ -639,6 +653,29 @@ impl PythonBridge {
             .await
             .map_err(|_| anyhow!("Python bridge has shut down"))
     }
+
+    /// Send an arbitrary JSON payload to the Python subprocess.
+    /// The bridge injects the sequential request id before sending.
+    pub async fn send_custom(&self, payload: serde_json::Value) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::CustomJson { payload })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn review_codebase(&self, mode: String, target: String, output_format: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::ReviewCodebase { mode, target, output_format, severity: "low".to_string() })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
+
+    pub async fn review_codebase_full(&self, mode: String, target: String, output_format: String, severity: String) -> Result<()> {
+        self.request_tx
+            .send(BridgeRequest::ReviewCodebase { mode, target, output_format, severity })
+            .await
+            .map_err(|_| anyhow!("Python bridge has shut down"))
+    }
 }
 
 // ── spawn ──────────────────────────────────────────────────────────────────
@@ -798,6 +835,26 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "session_summary",
                             }),
+                            BridgeRequest::ReviewCodebase { mode, target, output_format, severity } => {
+                                let mut targets = Vec::new();
+                                if !target.is_empty() {
+                                    targets.push(target);
+                                }
+                                json!({
+                                    "id": id,
+                                    "type": "review",
+                                    "mode": mode,
+                                    "targets": targets,
+                                    "output_format": output_format,
+                                    "severity_threshold": severity,
+                                })
+                            },
+                            BridgeRequest::CustomJson { mut payload } => {
+                                // Inject our sequential id so we can correlate the response
+                                payload["id"] = json!(id);
+                                payload
+                            },
+
                             BridgeRequest::SessionCompare {
                                 older_session_id,
                                 newer_session_id,
@@ -884,6 +941,10 @@ async fn bridge_task(
                                 "id": id,
                                 "type": "memory_save",
                                 "fact": fact,
+                            }),
+                            BridgeRequest::MemoryRefresh => json!({
+                                "id": id,
+                                "type": "memory_refresh",
                             }),
                             BridgeRequest::IndexContext {
                                 total_files,

@@ -1,25 +1,31 @@
 //! Terminal-native color theme for HiNala.
 //!
-//! Uses Color::Reset for backgrounds (respects user's terminal theme) and
-//! ANSI-compatible colors for accents. Avoids DarkGray for any text that
-//! must be readable — it renders as near-invisible on most dark terminals.
+//! Uses a Tokyo Night-inspired palette while still rendering cleanly in
+//! terminals that only partially support styling.
 
 use ratatui::style::{Color, Modifier, Style};
 
-pub const CYAN: Color = Color::Cyan;
-pub const GREEN: Color = Color::Green;
-pub const YELLOW: Color = Color::Yellow;
-pub const RED: Color = Color::Red;
-pub const MAGENTA: Color = Color::Magenta;
-pub const BLUE: Color = Color::Blue;
-pub const WHITE: Color = Color::White;
-pub const GRAY: Color = Color::Gray;
-pub const DARK_GRAY: Color = Color::DarkGray;
+pub const BG: Color = Color::Rgb(0x1a, 0x1b, 0x26);
+pub const FG: Color = Color::Rgb(0xc0, 0xca, 0xf5);
+pub const ACCENT: Color = Color::Rgb(0x7a, 0xa2, 0xf7);
+pub const SUCCESS: Color = Color::Rgb(0x9e, 0xce, 0x6a);
+pub const WARNING: Color = Color::Rgb(0xe0, 0xaf, 0x68);
+pub const ERROR: Color = Color::Rgb(0xf7, 0x76, 0x8e);
+pub const INFO: Color = Color::Rgb(0x7d, 0xcf, 0xff);
+pub const DIM: Color = Color::Rgb(0x56, 0x5f, 0x89);
+pub const BORDER: Color = Color::Rgb(0x3b, 0x42, 0x61);
+pub const SELECTION_BG: Color = Color::Rgb(0x28, 0x34, 0x57);
+pub const USER_INPUT_BG: Color = Color::Rgb(0x24, 0x28, 0x3b);
 
-pub const ACCENT: Color = CYAN;
-pub const SUCCESS: Color = GREEN;
-pub const WARNING: Color = YELLOW;
-pub const ERROR: Color = RED;
+pub const CYAN: Color = INFO;
+pub const GREEN: Color = SUCCESS;
+pub const YELLOW: Color = WARNING;
+pub const RED: Color = ERROR;
+pub const MAGENTA: Color = Color::Rgb(0xbb, 0x9a, 0xf7);
+pub const BLUE: Color = ACCENT;
+pub const WHITE: Color = FG;
+pub const GRAY: Color = DIM;
+pub const DARK_GRAY: Color = BORDER;
 
 pub const LANG_RUST: Color = YELLOW;
 pub const LANG_PYTHON: Color = BLUE;
@@ -32,19 +38,19 @@ pub const DIFF_ADD: Color = GREEN;
 pub const DIFF_REMOVE: Color = RED;
 
 pub fn base() -> Style {
-    Style::reset()
+    Style::default().fg(FG).bg(BG)
 }
 
 pub fn dim() -> Style {
-    Style::default().fg(GRAY)
+    Style::default().fg(DIM)
 }
 
 pub fn muted() -> Style {
-    Style::default().fg(GRAY)
+    Style::default().fg(DIM)
 }
 
 pub fn bold_accent() -> Style {
-    Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
 }
 
 pub fn lang_color(ext: &str) -> Color {

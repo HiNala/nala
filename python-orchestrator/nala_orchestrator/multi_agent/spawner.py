@@ -69,15 +69,6 @@ class WorkerAgent:
 
     async def run(self) -> WorkerResult:
         """Execute the task and report back through the task list."""
-        if not self._task_list.claim_task(self.agent_id, self.task.id):
-            return WorkerResult(
-                task_id=self.task.id,
-                agent_id=self.agent_id,
-                success=False,
-                summary="Could not claim task (already taken)",
-                files_touched=[],
-            )
-
         # Acquire file locks for scoped files
         acquired: list[str] = []
         for fp in self.task.scope:
@@ -87,119 +78,49 @@ class WorkerAgent:
             else:
                 acquired.append(fp)
 
-        try:
-            result = await asyncio.wait_for(
-                self._execute(), timeout=_WORKER_TIMEOUT
-            )
-            self._task_list.complete_task(self.agent_id, self.task.id, result.summary)
-        except asyncio.TimeoutError:
-            result = WorkerResult(
-                task_id=self.task.id,
-                agent_id=self.agent_id,
-                success=False,
-                summary=f"Worker timed out after {_WORKER_TIMEOUT}s",
-                files_touched=[],
-            )
-            self._task_list.fail_task(
-                self.agent_id, self.task.id, result.summary
-            )
-        except Exception as e:
-            result = WorkerResult(
-                task_id=self.task.id,
-                agent_id=self.agent_id,
-                success=False,
-                summary=f"Error: {e}",
-                files_touched=[],
-            )
-            self._task_list.fail_task(self.agent_id, self.task.id, str(e))
-        finally:
-            for fp in acquired:
-                self._locks.release(self.agent_id, fp)
-
-        return result
-
-    async def _execute(self) -> WorkerResult:
-        """Run the task using the full tool-calling loop.
-
-        Workers use the same tool loop as the main agent so they can actually
-        read, write, and edit files rather than just generating text.
-        """
-        from ..agent_runtime.tool_executor import run_tool_loop
-        from ..agent_runtime.toolbox import Toolbox
-        from ..agents.orchestrator import AgentOrchestrator
-        from ..llm.provider import create_provider
+        from ..agents.launcher import spawn_registered_worker
+        from ..agents.registry import AgentRegistry
 
         project_root = self._project_root or Path(".")
-        agent = AgentOrchestrator(self.config, model_override=self._model_override)
+        registry = AgentRegistry(project_root)
+        spawn_registered_worker(project_root, self.agent_id, self.task.id)
 
-        if self._embedder is not None and self._embedder.is_ready():
-            agent.set_embedder(self._embedder)
-        if self._project_root is not None:
-            agent.context.project_root = str(self._project_root)
+        # Poll until the task finishes or the process dies (or timeout)
+        import time
+        start_time = time.time()
+        while time.time() - start_time < _WORKER_TIMEOUT:
+            # Exit early if the task already reached a terminal state
+            task_check = self._task_list.get_task(self.task.id)
+            if task_check and task_check.status.value in ("completed", "failed"):
+                break
+            # Exit if the process is gone (crashed or finished without updating task)
+            if not registry.is_alive(self.agent_id):
+                break
+            await asyncio.sleep(2)
+            
+        # Post exit status check
+        task = self._task_list.get_task(self.task.id)
+        if task and task.status.value in ("completed", "failed"):
+            success = task.status.value == "completed"
+            summary = task.result_summary
+        else:
+            success = False
+            summary = "Agent crashed or terminated without updating task."
+            self._task_list.fail_task(self.agent_id, self.task.id, summary)
 
-        toolbox = Toolbox(self.config, project_root, orchestrator=agent)
+        registry.cleanup_dead()
 
-        # Build a rich scoped system prompt for the worker
-        scope_desc = ", ".join(self.task.scope) if self.task.scope else "entire project"
-        inbox = self._bus.format_for_agent(self.agent_id)
-        prompt_parts = [
-            f"You are worker agent **{self.agent_id}**, part of a multi-agent coding team.",
-            "You have full tool access to read, write, edit, and run commands.",
-            f"**Your scope:** {scope_desc}",
-            f"**Project root:** {project_root}",
-        ]
-        if self._project_brief:
-            prompt_parts.append(f"\n**Project context:** {self._project_brief[:400]}")
-        if inbox:
-            prompt_parts.append(f"\n**Messages from team:**\n{inbox}")
-        prompt_parts += [
-            "",
-            "Use tools to explore and make changes. Always read files before editing.",
-            "After completing your task, report: what you changed, where, and the outcome.",
-        ]
-        system_prompt = "\n".join(prompt_parts)
+        for fp in acquired:
+            self._locks.release(self.agent_id, fp)
 
-        try:
-            provider = create_provider(self.config)
-        except Exception as exc:
-            raise RuntimeError(f"Could not create LLM provider: {exc}") from exc
-
-        chunks: list[str] = []
-        try:
-            async for chunk in run_tool_loop(
-                provider=provider,
-                toolbox=toolbox,
-                system_prompt=system_prompt,
-                user_message=self.task.objective,
-                max_rounds=15,
-                max_tokens=4096,
-            ):
-                chunks.append(chunk)
-        except Exception as e:
-            raise RuntimeError(f"Worker tool loop failed: {e}") from e
-
-        full_response = "".join(chunks)
-
-        # Determine which files were actually touched by checking git diff
-        files_touched = list(self.task.scope)
-        try:
-            diff_out = toolbox.git_diff()
-            if diff_out and "no changes" not in diff_out:
-                import re
-                touched = re.findall(r"^diff --git a/.+ b/(.+)$", diff_out, re.MULTILINE)
-                if touched:
-                    files_touched = touched
-        except Exception:
-            pass
-
-        success = bool(full_response.strip()) and "(tool error" not in full_response.lower()
         return WorkerResult(
             task_id=self.task.id,
             agent_id=self.agent_id,
             success=success,
-            summary=full_response[:800],
-            files_touched=files_touched,
+            summary=summary,
+            files_touched=[],
         )
+
 
 
 class AgentSpawner:

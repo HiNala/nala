@@ -51,14 +51,13 @@ class HandoffReader:
         )
         # Skip chain.json
         json_files = [f for f in json_files if f.name != _CHAIN_FILE]
-        if not json_files:
-            return None
-        try:
-            data = json.loads(json_files[0].read_text(encoding="utf-8"))
-            return self._from_dict(data)
-        except Exception as e:
-            log.warning("Failed to load handoff: %s", e)
-            return None
+        for path in json_files:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return self._from_dict(data)
+            except Exception as e:
+                log.warning("Failed to load handoff %s: %s", path.name, e)
+        return None
 
     def get_continuity_chain(self) -> list[dict]:
         """Return the ordered list of handoff summaries for history display."""
@@ -66,7 +65,8 @@ class HandoffReader:
         if not chain_path.exists():
             return []
         try:
-            return json.loads(chain_path.read_text(encoding="utf-8"))
+            data = json.loads(chain_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
         except Exception:
             return []
 
@@ -121,6 +121,9 @@ class HandoffReader:
         unsaved = [mf.path for mf in doc.modified_files if not mf.is_saved]
         if unsaved:
             parts.append("UNSAVED FILES: " + ", ".join(unsaved))
+        touched = [mf.path for mf in doc.modified_files if mf.path]
+        if touched:
+            parts.append("Files touched: " + ", ".join(touched[:6]))
 
         if doc.decisions:
             parts.append("Key decisions: " + "; ".join(d.text[:80] for d in doc.decisions[:3]))

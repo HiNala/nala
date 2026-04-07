@@ -18,6 +18,7 @@ Three-tier compaction strategy (applied in order):
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from ..compression.pipeline import CompressionPipeline
@@ -54,6 +55,7 @@ class Compactor:
         self,
         history: list[dict],
         token_estimate_fn=None,
+        focus: str = "",
     ) -> tuple[list[dict], CompactionResult]:
         """Compact the conversation history.
 
@@ -107,14 +109,21 @@ class Compactor:
 
         # ── Tier 2: summarise old turns into one system block ─────────────
         tier2_applied = False
+        preserved_focus_turns: list[dict] = []
+        if focus and pruned_old:
+            preserved_focus_turns = self._select_focus_turns(pruned_old, focus)
+            if preserved_focus_turns:
+                preserved_ids = {id(m) for m in preserved_focus_turns}
+                pruned_old = [m for m in pruned_old if id(m) not in preserved_ids]
+
         if pruned_old:
             summary_text = self._summarise_turns(pruned_old)
             compacted_history = [
                 {"role": "system", "content": summary_text}
-            ] + recent
+            ] + preserved_focus_turns + recent
             tier2_applied = True
         else:
-            compacted_history = recent
+            compacted_history = preserved_focus_turns + recent
 
         tokens_after = sum(_tok(_content_str(m)) for m in compacted_history)
 
@@ -126,8 +135,14 @@ class Compactor:
         strategy_used = "+".join(strategies) if strategies else "none"
 
         saved = tokens_before - tokens_after
+        preserved_summary = ""
+        if preserved_focus_turns:
+            preserved_summary = (
+                f"Preserved {len(preserved_focus_turns)} focus-relevant turns. "
+            )
         summary = (
             f"Compacted {len(old)} older turns → 1 summary block. "
+            f"{preserved_summary}"
             f"Kept {len(recent)} recent turns verbatim. "
             f"Estimated savings: ~{saved:,} tokens. "
             f"Pipeline: {pipe_report.reduction_pct:.0f}% content reduction."
@@ -229,3 +244,22 @@ class Compactor:
             parts.append(f"Key tool outputs: {' | '.join(tool_results[-4:])}")
         parts.append("[End of compacted context — recent turns follow]")
         return "\n".join(parts)
+
+    @staticmethod
+    def _select_focus_turns(turns: list[dict], focus: str, limit: int = 2) -> list[dict]:
+        focus_terms = {
+            term for term in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", focus.lower())
+            if term not in {"focus", "preserve", "module", "refactor", "the", "and", "for"}
+        }
+        if not focus_terms:
+            return []
+        scored: list[tuple[int, int, dict]] = []
+        for idx, turn in enumerate(turns):
+            content = str(turn.get("content", "")).lower()
+            score = sum(1 for term in focus_terms if term in content)
+            if score > 0:
+                scored.append((score, idx, turn))
+        scored.sort(key=lambda item: (-item[0], -item[1]))
+        selected = scored[:limit]
+        selected.sort(key=lambda item: item[1])
+        return [turn for _, _, turn in selected]

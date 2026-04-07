@@ -105,6 +105,10 @@ from .sessions.report import AuditReport, Finding, ReportGenerator
 from .startup import gather_startup_intelligence
 from .tasks.ledger import TaskLedger
 
+from .review.models import ReviewRequest
+from .review.engine import ReviewEngine
+from .review.output import format_review_output
+
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("NALA_DEBUG") else logging.WARNING,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -398,8 +402,20 @@ def _broadcast_agent_state(req_id: str) -> None:
     run = _agent_manager.current_run
     worker_lines: list[str] = []
     if hasattr(_agent_manager, "_workers"):
+        from nala_orchestrator.agents.registry import AgentRegistry
+        from pathlib import Path
+        registry = AgentRegistry(_agent_manager.project_root)
+        
         for w in _agent_manager._workers.list_all():
-            worker_lines.append(w.status_line())
+            base_status = w.status_line()
+            h = registry.get_agent(w.worker_id)
+            if h and registry.is_alive(w.worker_id):
+                info = f"{h.strategy}:{h.window_name or Path(h.log_file).name if h.log_file else ''}"
+                worker_lines.append(f"{base_status}  {info}")
+            elif h:
+                worker_lines.append(f"{base_status}  (dead)")
+            else:
+                worker_lines.append(base_status)
     choices = _agent_manager.suggest_next_steps() if _agent_manager else []
     checkpoint_count = len(run.checkpoints) if hasattr(run, "checkpoints") else 0
     priority = _agent_manager.notification_priority() if _agent_manager else "quiet"
@@ -786,6 +802,74 @@ async def handle_request(
             write_response({"id": req_id, "type": "error", "text": str(e)})
             write_response({"id": req_id, "type": "done"})
 
+    # ── CodeRabbit-Style Actionable Code Review ─────────────────────────────
+    elif req_type == "review":
+        mode = req.get("mode", "full")
+        targets = req.get("targets", [])
+        perspectives = req.get("perspectives", [])
+        severity_threshold = req.get("severity_threshold", "low")
+        output_format = req.get("output_format", "prompts")
+        project_root_str = req.get("project_root") or str(root)
+        
+        req_obj = ReviewRequest(
+            mode=mode,
+            targets=targets,
+            perspectives=perspectives,
+            severity_threshold=severity_threshold,
+            output_format=output_format,
+        )
+
+        graph_conn = None
+        try:
+            try:
+                from .graph.connection import GraphConnection
+                graph_conn = GraphConnection(config)
+                graph_conn.connect()
+            except Exception as e:
+                log.debug("Graph unavailable for review: %s", e)
+                graph_conn = None
+
+            provider = agent._get_provider() if config.has_llm() else None
+            engine = ReviewEngine(project_root_str, provider=provider, graph=graph_conn)
+            
+            result = await engine.run_review(req_obj)
+            output = format_review_output(result.findings, output_format)
+            
+            if output_format == "clipboard":
+                # Special payload to Rust TUI
+                write_response({"id": req_id, "type": "clipboard_copy", "text": output})
+                _stream_text(req_id, f"📝 Review complete! Prompts copied to clipboard.\n\nFiles scanned: {result.files_scanned}\nFindings generated: {len(result.findings)}")
+            else:
+                _stream_text(req_id, output)
+                
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Review error: {e}"})
+        finally:
+            if graph_conn is not None:
+                graph_conn.close()
+
+    # ── Dismiss a review finding (add to learnings) ─────────────────────────
+    elif req_type == "review_dismiss":
+        rule_name = req.get("rule_name", "")
+        file_pattern = req.get("file_pattern", "*")
+        dismissed_pattern = req.get("dismissed_pattern", "")
+        reason = req.get("reason", "dismissed by user")
+        try:
+            from .review.learnings import LearningsDB, Learning
+            from datetime import datetime, timezone
+            db = LearningsDB(root / ".nala")
+            db.learnings.append(Learning(
+                rule_name=rule_name,
+                file_pattern=file_pattern,
+                dismissed_pattern=dismissed_pattern,
+                reason=reason,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ))
+            db.save()
+            _stream_text(req_id, f"Dismissed rule `{rule_name}` for pattern `{file_pattern}`. Future reviews will skip this finding.")
+        except Exception as e:
+            write_response({"id": req_id, "type": "error", "text": f"Dismiss error: {e}"})
+
     # ── Run perspectives (streaming formatted report) ─────────────────────
     elif req_type == "run_perspectives":
         project_root_str = req.get("project_root") or str(root)
@@ -1115,6 +1199,12 @@ async def handle_request(
             kb = KnowledgeBase(root)
             kb.add_fact(fact, category=category)
             _stream_text(req_id, f"Saved to knowledge base: *{fact[:100]}*")
+
+    # ── Memory: refresh from recent session memories ──────────────────────
+    elif req_type == "memory_refresh":
+        kb = KnowledgeBase(root)
+        refreshed = kb.rebuild_from_session_dir(root / ".nala" / "memory" / "sessions", limit=10)
+        _stream_text(req_id, f"Knowledge base refreshed from {refreshed} recent session(s).")
 
     # ── Context: usage breakdown ──────────────────────────────────────────
     elif req_type == "context_usage":
@@ -1468,10 +1558,18 @@ async def handle_request(
 
     elif req_type == "agent_worker_detail":
         wid = req.get("worker_id", "").strip()
-        if _agent_manager is None:
-            _stream_text(req_id, "Agent runtime not ready.")
-        else:
+        from nala_orchestrator.agents.registry import AgentRegistry
+        from nala_orchestrator.agents.terminal import TerminalDetector
+        registry = AgentRegistry(root)
+        h = registry.get_agent(wid)
+        if h:
+            strategy = TerminalDetector.get_strategy_for_handle(root, h)
+            out = strategy.get_output(h, 50)
+            _stream_text(req_id, f"--- Tail log for {wid} ---\n{out}")
+        elif _agent_manager is not None:
             _stream_text(req_id, _agent_manager.get_worker_detail(wid))
+        else:
+            _stream_text(req_id, "Agent runtime not ready.")
 
     elif req_type == "agent_worker_message":
         wid = req.get("worker_id", "").strip()

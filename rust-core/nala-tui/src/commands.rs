@@ -36,6 +36,10 @@ impl App {
                 let perspective = parts.get(1).copied().unwrap_or("all").to_string();
                 self.run_perspectives(perspective);
             }
+            "/review" => {
+                let args = parts.get(1).copied().unwrap_or("").trim();
+                self.handle_review_command(args);
+            }
             "/model" => {
                 let args = parts.get(1).copied().unwrap_or("").trim();
                 if args.is_empty() {
@@ -143,7 +147,17 @@ impl App {
             // ── /agent: primary autonomous workflow entrypoint ────────────
             "/agent" => {
                 let args = parts.get(1).copied().unwrap_or("").trim();
-                self.handle_agent_command(args);
+                if args.is_empty() {
+                    self.push_message(Message::system("Usage: /agent <objective>  (or try /agent status | /agent <id> | /agent stop)"));
+                } else if args == "status" {
+                    self.send_agent_status_request();
+                } else if args == "stop" {
+                    self.send_agent_stop_request();
+                } else if args.starts_with("worker-") || args.parse::<u32>().is_ok() {
+                    self.send_agent_tail_request(args);
+                } else {
+                    self.handle_agent_command(args);
+                }
             }
             // ── Deprecated aliases → silent redirect ───────────────────
             "/act" => {
@@ -248,6 +262,7 @@ impl App {
             "  /agent research <q>    — look up external docs\n",
             "  /agent next            — show suggested next steps\n\n",
             "### Code\n",
+            "  /review [path|--diff]  — actionable CodeRabbit-style local review\n",
             "  /analyze [quick]       — run analysis perspectives\n",
             "  /scope <path>          — focus on a subtree\n",
             "  /read <file>           — show file contents\n",
@@ -261,6 +276,7 @@ impl App {
             "  /memory                — knowledge base summary\n",
             "  /memory save <fact>    — save a fact to the knowledge base\n",
             "  /memory sessions       — list past session memories\n",
+            "  /memory refresh        — rebuild knowledge from recent sessions\n",
             "  /memory forget <topic> — remove facts matching a topic\n",
             "  /graph                 — Neo4j graph stats\n",
             "  /handoff               — show / save handoff docs\n\n",
@@ -426,6 +442,60 @@ impl App {
         )));
         tokio::spawn(async move {
             if let Err(e) = bridge.run_perspectives(root, &perspective).await {
+                let _ = tx
+                    .send(BackgroundEvent::AssistantError(e.to_string()))
+                    .await;
+            }
+        });
+    }
+
+    pub(crate) fn handle_review_command(&mut self, args: &str) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+
+        let mut mode = "full".to_string();
+        let mut target = String::new();
+        let mut output_format = "prompts".to_string();
+        let mut severity = "low".to_string();
+
+        // Parse flags: --diff, --copy, --save, --severity <level>, or a path target.
+        // Remaining non-flag tokens are treated as the file/glob target.
+        let toks: Vec<&str> = args.split_whitespace().collect();
+        let mut i = 0;
+        let mut path_toks: Vec<&str> = Vec::new();
+        while i < toks.len() {
+            match toks[i] {
+                "--diff" => { mode = "diff".to_string(); }
+                "--copy" => { output_format = "clipboard".to_string(); }
+                "--save" => { output_format = "markdown".to_string(); }
+                "--json" => { output_format = "json".to_string(); }
+                "--severity" => {
+                    i += 1;
+                    if i < toks.len() {
+                        severity = toks[i].to_string();
+                    }
+                }
+                tok => { path_toks.push(tok); }
+            }
+            i += 1;
+        }
+        if !path_toks.is_empty() {
+            mode = "file".to_string();
+            target = path_toks.join(" ");
+        }
+
+        self.mode = AppMode::Analyzing;
+        let severity_label = if severity == "low" { String::new() } else { format!(" (>= {})", severity) };
+        self.push_message(Message::system(format!(
+            "Running review engine — mode: {}{}",
+            mode, severity_label
+        )));
+
+        tokio::spawn(async move {
+            if let Err(e) = bridge.review_codebase_full(mode, target, output_format, severity).await {
                 let _ = tx
                     .send(BackgroundEvent::AssistantError(e.to_string()))
                     .await;
@@ -1078,6 +1148,16 @@ impl App {
                     }
                 });
             }
+            "refresh" => {
+                self.push_message(Message::system("Refreshing project knowledge from recent sessions..."));
+                tokio::spawn(async move {
+                    if let Err(e) = bridge.memory_refresh().await {
+                        let _ = tx
+                            .send(BackgroundEvent::AssistantError(e.to_string()))
+                            .await;
+                    }
+                });
+            }
             "save" => {
                 let fact = sub.get(1).copied().unwrap_or("").trim().to_string();
                 if fact.is_empty() {
@@ -1110,7 +1190,7 @@ impl App {
             }
             _ => {
                 self.push_message(Message::error(
-                    "Usage: /memory | /memory sessions | /memory save <fact> | /memory forget <target>",
+                    "Usage: /memory | /memory sessions | /memory refresh | /memory save <fact> | /memory forget <target>",
                 ));
             }
         }
@@ -1228,6 +1308,50 @@ impl App {
                 ));
             }
         }
+    }
+
+    pub(crate) fn send_agent_status_request(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.agent_status().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+    }
+
+    pub(crate) fn send_agent_stop_request(&mut self) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.agent_stop().await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+    }
+
+    pub(crate) fn send_agent_tail_request(&mut self, id: &str) {
+        let Some(bridge) = self.python_bridge.clone() else {
+            self.push_message(Message::system("AI bridge not ready."));
+            return;
+        };
+        let tx = self.bg_tx.clone();
+        let safe_id = id.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = bridge.send_custom(serde_json::json!({
+                "type": "agent_worker_detail",
+                "worker_id": safe_id,
+            })).await {
+                let _ = tx.send(BackgroundEvent::AssistantError(e.to_string())).await;
+            }
+        });
+        self.push_message(Message::system(format!("Tailing output for {}...", id)));
     }
 
     fn handle_agent_command(&mut self, args: &str) {

@@ -4,7 +4,7 @@
 use crate::app::{App, AppMode};
 use crate::ui::theme;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -21,14 +21,36 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         _ => theme::CYAN,
     };
 
+    let project_name = app
+        .project_root
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| app.project_root.display().to_string());
+    let branch = app
+        .startup_intel
+        .as_ref()
+        .map(|intel| intel.git_branch.as_str())
+        .filter(|branch| !branch.is_empty())
+        .unwrap_or("main");
+
     let mut detail = if app.index_progress.is_some() {
         let phase = app.index_phase.as_deref().unwrap_or("indexing");
-        format!(" {} {}...", SPINNER[(app.splash_start.elapsed().as_millis() / 80) as usize % SPINNER.len()], phase)
+        format!(
+            " {} {}...",
+            SPINNER[(app.splash_start.elapsed().as_millis() / 80) as usize % SPINNER.len()],
+            phase
+        )
     } else if app.stats.total_files > 0 {
-        format!(" {} files  {} symbols", app.stats.total_files, app.stats.total_functions)
+        format!(
+            " {} files  {} symbols",
+            app.stats.total_files,
+            app.stats.total_functions
+        )
     } else {
         format!(" {}", app.status_text)
     };
+    let mut context_detail = String::new();
 
     if !app.agent_phase.is_empty()
         && app.agent_phase != "idle"
@@ -46,85 +68,80 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    if app.context_effective_limit > 0 && area.width >= 90 {
+    if app.context_effective_limit > 0 && area.width >= 88 {
         let bar = context_bar(app.context_utilization_pct);
-        detail.push_str(&format!(
-            "  ctx {:.0}% {} {}/{}",
+        context_detail = format!(
+            "ctx {:.0}% {} {}/{}",
             app.context_utilization_pct,
             bar,
             short_tokens(app.context_total_tokens),
             short_tokens(app.context_effective_limit)
-        ));
+        );
     }
 
-    let right_text = if area.width >= 110 && !app.llm_model.is_empty() {
-        format!("{}  /help", app.llm_model)
-    } else if area.width >= 72 {
-        "/help".to_string()
+    let right_text = if area.width >= 118 && !app.llm_model.is_empty() {
+        format!("{}  ?=help", app.llm_model)
+    } else if area.width >= 84 {
+        "?=help".to_string()
     } else {
         String::new()
     };
 
-    let right_width = right_text.chars().count() as u16;
-    let left_detail_limit = area
-        .width
-        .saturating_sub(right_width.saturating_add(10)) as usize;
-    let detail = truncate_text(&detail, left_detail_limit);
-
-    let cols = if right_text.is_empty() {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Fill(1)])
-            .split(area)
-    } else {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Fill(1), Constraint::Length(right_width)])
-            .split(area)
-    };
-
-    let mut left_spans: Vec<Span> = vec![Span::styled(
+    let mut spans: Vec<Span> = vec![Span::styled(
         format!(" {} ", app.mode),
         Style::default()
             .fg(mode_color)
             .add_modifier(Modifier::BOLD),
     )];
+    spans.push(Span::styled("│ ", Style::default().fg(theme::BORDER)));
+    spans.push(Span::styled(
+        format!("{project_name}/ ({branch})"),
+        Style::default().fg(theme::WHITE),
+    ));
+    spans.push(Span::styled(" │ ", Style::default().fg(theme::BORDER)));
 
     if app.mode == AppMode::Analyzing {
         let idx = (app.splash_start.elapsed().as_millis() / 80) as usize % SPINNER.len();
-        left_spans.push(Span::styled(
+        spans.push(Span::styled(
             format!("{} ", SPINNER[idx]),
             Style::default().fg(theme::YELLOW),
         ));
     }
-    left_spans.push(Span::styled(detail, Style::default().fg(theme::GRAY)));
+    spans.push(Span::styled(
+        truncate_text(&detail, 40),
+        Style::default().fg(theme::GRAY),
+    ));
 
-    frame.render_widget(Paragraph::new(Line::from(left_spans)), cols[0]);
-
-    if !right_text.is_empty() {
-        let right_spans = if right_text == "/help" {
-            vec![Span::styled("/help", Style::default().fg(theme::CYAN))]
-        } else {
-            vec![
-                Span::styled(
-                    app.llm_model.clone(),
-                    Style::default().fg(theme::GRAY),
-                ),
-                Span::styled("  ", Style::default()),
-                Span::styled("/help", Style::default().fg(theme::CYAN)),
-            ]
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(right_spans)).alignment(ratatui::layout::Alignment::Right),
-            cols[1],
-        );
+    if !context_detail.is_empty() {
+        spans.push(Span::styled(" │ ", Style::default().fg(theme::BORDER)));
+        spans.push(Span::styled(
+            context_detail,
+            Style::default().fg(context_color(app.context_utilization_pct)),
+        ));
     }
+
+    if !right_text.is_empty() && area.width >= 72 {
+        spans.push(Span::styled(" │ ", Style::default().fg(theme::BORDER)));
+        spans.push(Span::styled(right_text, Style::default().fg(theme::CYAN)));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn context_bar(utilization_pct: f64) -> String {
     let filled = ((utilization_pct / 10.0).round() as usize).min(10);
     let empty = 10usize.saturating_sub(filled);
     format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+}
+
+fn context_color(utilization_pct: f64) -> ratatui::style::Color {
+    if utilization_pct >= 80.0 {
+        theme::RED
+    } else if utilization_pct >= 60.0 {
+        theme::YELLOW
+    } else {
+        theme::GREEN
+    }
 }
 
 fn short_tokens(tokens: usize) -> String {

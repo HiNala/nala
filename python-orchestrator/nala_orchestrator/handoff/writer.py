@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from .schema import (
@@ -150,8 +151,8 @@ class HandoffWriter:
         ts_safe = doc.timestamp[:19].replace(":", "-").replace("T", "_")
         json_path = self._dir / f"{ts_safe}.json"
         md_path = self._dir / f"{ts_safe}.md"
-        json_path.write_text(doc.to_json(), encoding="utf-8")
-        md_path.write_text(doc.to_markdown(), encoding="utf-8")
+        self._write_atomic(json_path, doc.to_json())
+        self._write_atomic(md_path, doc.to_markdown())
         log.info("Handoff saved: %s", json_path.name)
 
     def _update_chain(self, doc: HandoffDocument) -> None:
@@ -162,13 +163,24 @@ class HandoffWriter:
                 chain = json.loads(chain_path.read_text(encoding="utf-8"))
             except Exception:
                 chain = []
-        chain.append({
+        entry = {
             "timestamp": doc.timestamp,
             "session_id": doc.session_id,
             "trigger": doc.trigger,
             "objective": doc.objective[:100],
             "completed_count": len(doc.completed_actions),
-        })
+        }
+        chain = [item for item in chain if not (
+            item.get("timestamp") == doc.timestamp
+            and item.get("session_id") == doc.session_id
+            and item.get("trigger") == doc.trigger
+        )]
+        chain.append(entry)
         # Keep last 50 entries
         chain = chain[-50:]
-        chain_path.write_text(json.dumps(chain, indent=2), encoding="utf-8")
+        self._write_atomic(chain_path, json.dumps(chain, indent=2))
+
+    def _write_atomic(self, path: Path, content: str) -> None:
+        temp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+        temp_path.write_text(content, encoding="utf-8")
+        os.replace(temp_path, path)

@@ -953,6 +953,41 @@ Rules:
 
     # ── Worker management (M32/M33) ───────────────────────────────────
 
+    def _sync_worker_runtime_state(self) -> None:
+        from ..agents.registry import AgentRegistry
+        from ..multi_agent.task_list import SharedTaskList
+
+        changed = False
+        registry = AgentRegistry(self.project_root)
+        task_list = SharedTaskList(self.project_root)
+
+        for worker in self._workers.list_all():
+            task = task_list.get_task(worker.task_id) if worker.task_id else None
+            if task is not None:
+                if task.status.value == "completed" and worker.status != WorkerStatus.COMPLETED:
+                    worker.status = WorkerStatus.COMPLETED
+                    worker.result_summary = task.result_summary
+                    changed = True
+                elif task.status.value == "failed" and worker.status != WorkerStatus.FAILED:
+                    worker.status = WorkerStatus.FAILED
+                    worker.result_summary = task.result_summary
+                    changed = True
+            if worker.status in (WorkerStatus.PENDING, WorkerStatus.RUNNING):
+                handle = registry.get_agent(worker.worker_id)
+                if handle is not None and registry.is_alive(worker.worker_id):
+                    if worker.status != WorkerStatus.RUNNING:
+                        worker.status = WorkerStatus.RUNNING
+                        changed = True
+                elif task is None or task.status.value not in {"completed", "failed"}:
+                    worker.status = WorkerStatus.FAILED
+                    if not worker.result_summary:
+                        worker.result_summary = "Worker exited without updating its task state."
+                    changed = True
+
+        if changed and self._run is not None:
+            self._run.workers = self._workers.to_list()
+            save_run(self.project_root, self._run)
+
     def spawn_worker(
         self,
         objective: str,
@@ -979,22 +1014,78 @@ Rules:
         except ValueError:
             worker_role = WorkerRole.IMPLEMENT
 
+        from ..agents.launcher import spawn_registered_worker
+        from ..agents.registry import AgentRegistry
+        from ..multi_agent.task_list import SharedTaskList
+
+        task_list = SharedTaskList(self.project_root)
+        shared_task = task_list.add_task(
+            objective=objective,
+            scope=[scope] if scope else [],
+        )
+
         worker = self._workers.spawn(
             objective=objective,
             role=worker_role,
             scope=scope,
             worktree_path=wt_path,
+            label=f"{worker_role.value}:{objective[:24]}",
         )
         if worker is None:
             return "Failed to spawn worker."
+        worker.task_id = shared_task.id
+        worker.status = WorkerStatus.RUNNING
+
+        try:
+            handle = spawn_registered_worker(self.project_root, worker.worker_id, shared_task.id)
+        except Exception as exc:
+            worker.status = WorkerStatus.FAILED
+            worker.result_summary = str(exc)
+            task_list.fail_task(worker.worker_id, shared_task.id, str(exc))
+            self._run.workers = self._workers.to_list()
+            save_run(self.project_root, self._run)
+            return f"Failed to spawn worker `{worker.worker_id}`: {exc}"
+
+        worker.strategy = handle.strategy
+        worker.window_name = handle.window_name or ""
+        worker.log_file = handle.log_file or ""
+        worker.working_dir = handle.working_dir
+        AgentRegistry(self.project_root).update(
+            worker.worker_id,
+            task_id=shared_task.id,
+            objective=objective,
+            status="running",
+        )
         self._run.workers = self._workers.to_list()
         save_run(self.project_root, self._run)
-        return f"Spawned worker `{worker.worker_id}` ({worker.role.value}): {objective[:60]}"
+        return (
+            f"Spawned worker `{worker.worker_id}` ({worker.role.value}) via {handle.strategy}: "
+            f"{objective[:60]}"
+        )
 
     def list_workers(self) -> str:
+        self._sync_worker_runtime_state()
         return self._workers.format_summary()
 
     def cancel_worker(self, worker_id: str) -> str:
+        self._sync_worker_runtime_state()
+        worker = self._workers.get(worker_id)
+        if worker is None:
+            return f"Worker `{worker_id}` not found or already finished."
+
+        from ..agents.registry import AgentRegistry
+        from ..agents.terminal import TerminalDetector
+
+        registry = AgentRegistry(self.project_root)
+        handle = registry.get_agent(worker_id)
+        if handle is not None:
+            try:
+                strategy = TerminalDetector.get_strategy_for_handle(self.project_root, handle)
+                strategy.kill_agent(handle)
+            except Exception as exc:
+                log.warning("Failed to terminate worker %s cleanly: %s", worker_id, exc)
+            registry.unregister(worker_id)
+
         if self._workers.cancel(worker_id):
             if self._run:
                 self._run.workers = self._workers.to_list()
@@ -1003,20 +1094,39 @@ Rules:
         return f"Worker `{worker_id}` not found or already finished."
 
     def send_to_worker(self, worker_id: str, message: str) -> str:
-        """Send a message to a worker (via message bus)."""
+        """Send interactive input to a live worker when the backend supports it."""
+        self._sync_worker_runtime_state()
         worker = self._workers.get(worker_id)
         if worker is None:
             return f"Worker `{worker_id}` not found."
         if worker.status not in (WorkerStatus.PENDING, WorkerStatus.RUNNING):
             return f"Worker `{worker_id}` is {worker.status.value}, cannot message."
-        self.toolbox.send_worker_message(worker_id, message)
+
+        from ..agents.registry import AgentRegistry
+        from ..agents.terminal import TerminalDetector
+
+        registry = AgentRegistry(self.project_root)
+        handle = registry.get_agent(worker_id)
+        if handle is None:
+            return f"Worker `{worker_id}` is no longer active."
+
+        try:
+            strategy = TerminalDetector.get_strategy_for_handle(self.project_root, handle)
+            strategy.send_input(handle, message)
+        except Exception as exc:
+            return f"Could not send input to `{worker_id}`: {exc}"
         return f"Message sent to `{worker_id}`."
 
     def get_worker_detail(self, worker_id: str) -> str:
-        """Get detailed info for a worker (for attach view)."""
+        """Get detailed info for a worker, including output location and tail."""
+        self._sync_worker_runtime_state()
         worker = self._workers.get(worker_id)
         if worker is None:
             return f"Worker `{worker_id}` not found."
+
+        from ..agents.registry import AgentHandle, AgentRegistry
+        from ..agents.terminal import TerminalDetector
+
         lines = [
             f"**Worker** `{worker.worker_id}`",
             f"**Role:** {worker.role.value}",
@@ -1027,6 +1137,37 @@ Rules:
             lines.append(f"**Scope:** {worker.scope}")
         if worker.worktree_path:
             lines.append(f"**Worktree:** {worker.worktree_path}")
+        if worker.task_id:
+            lines.append(f"**Task ID:** {worker.task_id}")
+        if worker.strategy:
+            lines.append(f"**Backend:** {worker.strategy}")
+        if worker.window_name:
+            lines.append(f"**Terminal:** {worker.window_name}")
+        if worker.log_file:
+            lines.append(f"**Log:** {worker.log_file}")
+
+        registry = AgentRegistry(self.project_root)
+        handle = registry.get_agent(worker_id)
+        if handle is None and worker.strategy:
+            handle = AgentHandle(
+                agent_id=worker.worker_id,
+                pid=-1,
+                strategy=worker.strategy,
+                task_id=worker.task_id,
+                window_name=worker.window_name or None,
+                log_file=worker.log_file or None,
+                status=worker.status.value,
+                objective=worker.objective,
+                working_dir=worker.working_dir,
+            )
+        if handle is not None:
+            try:
+                strategy = TerminalDetector.get_strategy_for_handle(self.project_root, handle)
+                tail = strategy.get_output(handle, 50).strip()
+            except Exception as exc:
+                tail = f"(unable to read worker output: {exc})"
+            if tail:
+                lines.append(f"\n**Output tail:**\n```\n{tail}\n```")
         if worker.result_summary:
             lines.append(f"\n**Result:**\n{worker.result_summary}")
         if worker.files_touched:

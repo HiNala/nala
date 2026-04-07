@@ -161,6 +161,23 @@ class KnowledgeBase:
             deduped = deduped[:max_facts_per_category]
             path.write_text("\n".join(deduped) + "\n", encoding="utf-8")
 
+    def rebuild_from_session_dir(self, session_dir: Path, limit: int = 10) -> int:
+        """Refresh the knowledge base from recent session memory markdown files."""
+        refreshed = 0
+        files = sorted(
+            session_dir.glob("*.md"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:limit]
+        for path in files:
+            try:
+                self.extract_from_session(path.read_text(encoding="utf-8"))
+                refreshed += 1
+            except Exception as exc:
+                log.debug("Knowledge refresh skipped %s: %s", path.name, exc)
+        self.consolidate()
+        return refreshed
+
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _classify(self, text: str) -> str:

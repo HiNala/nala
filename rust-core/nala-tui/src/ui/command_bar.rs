@@ -22,31 +22,36 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let sep_char = "─".repeat(area.width as usize);
     let separator = Line::from(Span::styled(
         sep_char,
-        Style::default().fg(theme::GRAY),
+        Style::default().fg(theme::BORDER),
     ));
     frame.render_widget(Paragraph::new(separator), rows[0]);
 
     let is_slash = app.input.starts_with('/');
 
     let input_style = if is_slash {
-        Style::default().fg(theme::YELLOW)
+        Style::default()
+            .fg(theme::ACCENT)
+            .bg(theme::USER_INPUT_BG)
     } else {
-        Style::default().fg(theme::WHITE)
+        Style::default()
+            .fg(theme::WHITE)
+            .bg(theme::USER_INPUT_BG)
     };
 
-    let prompt_width = 3usize;
+    let prompt_text = " nala ❯ ";
+    let prompt_width = prompt_text.chars().count();
     let available_text = area.width.saturating_sub(prompt_width as u16) as usize;
 
     let content = if app.input.is_empty() {
         Line::from(vec![
             Span::styled(
-                " > ",
+                prompt_text,
                 Style::default()
-                    .fg(theme::GREEN)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                truncate_text("Type a question or /help for commands", available_text),
+                truncate_text("Type a question, use /agent <id>, or press ? for help", available_text),
                 Style::default().fg(theme::GRAY),
             ),
         ])
@@ -54,9 +59,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         let visible_input = tail_fit(&app.input, available_text);
         let mut spans = vec![
             Span::styled(
-                " > ",
+                prompt_text,
                 Style::default()
-                    .fg(theme::GREEN)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(visible_input, input_style),

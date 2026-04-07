@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use constants::{APP_DESCRIPTION, APP_NAME, APP_VERSION};
 use std::env;
 use std::path::PathBuf;
+use std::process::Stdio;
 use tracing::info;
 
 // ── CLI definition ─────────────────────────────────────────────────────────
@@ -51,6 +52,20 @@ enum Commands {
         #[arg(short, long, default_value_t = 3000)]
         port: u16,
     },
+
+    /// Run CodeRabbit-style local code review
+    Review {
+        /// Format (prompts, json, markdown)
+        #[arg(long, default_value = "prompts")]
+        format: String,
+
+        /// Only review files changed in git diff
+        #[arg(long)]
+        diff: bool,
+
+        /// Optional path to review (file or glob)
+        path: Option<String>,
+    },
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
@@ -68,6 +83,7 @@ async fn main() -> Result<()> {
         Some(Commands::Scan) => run_scan(&cli.path).await,
         Some(Commands::Index) => run_index(&cli.path).await,
         Some(Commands::Dashboard { port }) => run_dashboard(&cli.path, port).await,
+        Some(Commands::Review { format, diff, path }) => run_review(&cli.path, format, diff, path).await,
         Some(Commands::Tui) | None => run_tui(&cli.path).await,
     }
 }
@@ -158,6 +174,58 @@ async fn run_dashboard(path: &std::path::Path, port: u16) -> Result<()> {
             Err(e)
         }
     }
+}
+
+async fn run_review(root: &std::path::Path, format: String, diff: bool, path: Option<String>) -> Result<()> {
+    let mut command = std::process::Command::new("python");
+    command.args(["-m", "nala_orchestrator.cli", "--root", &root.to_string_lossy()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+
+    let mut child = command.spawn().context("Failed to spawn python orchestrator")?;
+    
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    
+    // Fire and forget the payload
+    let target = path.unwrap_or_else(|| "".to_string());
+    let mode = if diff { "diff" } else if !target.is_empty() { "file" } else { "full" };
+    let mut targets = Vec::new();
+    if !target.is_empty() { targets.push(target); }
+    
+    let payload = serde_json::json!({
+        "id": "cli-review",
+        "type": "review",
+        "mode": mode,
+        "targets": targets,
+        "output_format": format
+    });
+    
+    use std::io::Write;
+    writeln!(stdin, "{}", payload.to_string())?;
+    drop(stdin);
+
+    use std::io::{BufRead, BufReader};
+    for line in BufReader::new(stdout).lines() {
+        let line = line?;
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+            if value.get("type").and_then(|v| v.as_str()) == Some("chunk") {
+                if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
+                    print!("{}", text);
+                }
+            } else if value.get("type").and_then(|v| v.as_str()) == Some("done") {
+                break;
+            } else if value.get("type").and_then(|v| v.as_str()) == Some("error") {
+                if let Some(msg) = value.get("text").and_then(|v| v.as_str()) {
+                    eprintln!("Error: {}", msg);
+                }
+                break;
+            }
+        }
+    }
+    
+    let _ = child.wait();
+    Ok(())
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

@@ -603,43 +603,30 @@ class Toolbox:
     # ── Agent delegation ──────────────────────────────────────────────
 
     async def spawn_worker(self, task: str, label: str = "") -> str:
-        """Run a child tool-calling agent for a focused sub-task.
-
-        The child agent gets full tool access and runs its own tool loop.
-        Use this to delegate self-contained chunks of work so the parent
-        agent's context stays clean.
-        """
-        from .tool_executor import run_tool_loop
-        from ..llm.provider import create_provider
+        """Spawn a dedicated external worker process for a focused sub-task."""
+        from ..agents.launcher import spawn_registered_worker
+        from ..agents.registry import AgentRegistry
+        from ..multi_agent.task_list import SharedTaskList
 
         label = label or "worker"
-        system_prompt = (
-            f"You are a focused coding agent handling the sub-task: {label}.\n"
-            f"You have full tool access. Complete the task, verify your work, "
-            f"and report what you did.\n"
-            f"Project root: {self.project_root}"
+        task_list = SharedTaskList(self.project_root)
+        shared_task = task_list.add_task(objective=task, scope=[])
+        agent_id = f"tool-{shared_task.id}"
+        try:
+            handle = spawn_registered_worker(self.project_root, agent_id, shared_task.id)
+        except Exception as exc:
+            return f"(spawn_worker: failed to spawn external worker — {exc})"
+
+        AgentRegistry(self.project_root).update(
+            agent_id,
+            task_id=shared_task.id,
+            objective=task,
+            status="running",
         )
-        try:
-            provider = create_provider(self.config)
-        except Exception as exc:
-            return f"(spawn_worker: could not create provider — {exc})"
-
-        chunks: list[str] = []
-        try:
-            async for chunk in run_tool_loop(
-                provider=provider,
-                toolbox=self,          # child shares parent's toolbox
-                system_prompt=system_prompt,
-                user_message=task,
-                max_rounds=20,
-                max_tokens=4096,
-            ):
-                chunks.append(chunk)
-        except Exception as exc:
-            return f"(spawn_worker: tool loop error — {exc})"
-
-        result = "".join(chunks)
-        return result[:8000] if result else "(spawn_worker: no output)"
+        return (
+            f"Spawned worker `{agent_id}` for `{label}` using {handle.strategy}. "
+            f"Track with `/agent {agent_id}` or `/agent workers`."
+        )
 
     # ── Progress checkpoints ──────────────────────────────────────────
 

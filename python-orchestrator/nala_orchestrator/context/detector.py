@@ -6,9 +6,12 @@ during bad moments (mid-edit, active analysis, etc.).
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from enum import Enum
+
+from .config import CompactionConfig
 
 
 class Priority(str, Enum):
@@ -40,15 +43,32 @@ class OpportunityDetector:
         self._is_analyzing:       bool  = False
         self._is_mid_reasoning:   bool  = False
         self._turn_count:         int   = 0
+        self._previous_user_message: str = ""
+        self._last_user_message:  str   = ""
+        self._subtask_completed:  bool  = False
+        self._tool_output_ready:  bool  = False
 
     # ── State setters (called by orchestrator/cli) ────────────────────────────
 
-    def mark_user_message(self) -> None:
+    def mark_user_message(self, text: str = "") -> None:
         self._last_user_activity = time.monotonic()
         self._turn_count += 1
+        if text:
+            self._previous_user_message = self._last_user_message
+            self._last_user_message = text
 
     def mark_assistant_response(self) -> None:
         self._is_mid_reasoning = False
+        self._subtask_completed = False
+
+    def mark_subtask_complete(self) -> None:
+        self._subtask_completed = True
+
+    def mark_tool_output_processed(self) -> None:
+        self._tool_output_ready = True
+
+    def clear_tool_output_processed(self) -> None:
+        self._tool_output_ready = False
 
     def mark_analysis_start(self) -> None:
         self._is_analyzing = True
@@ -72,6 +92,8 @@ class OpportunityDetector:
         utilization_pct: float,
         history_len: int,
         min_turns: int = 4,
+        config: CompactionConfig | None = None,
+        latest_user_message: str = "",
     ) -> CompactionOpportunity | None:
         """Evaluate whether now is a good time to compact.
 
@@ -80,7 +102,12 @@ class OpportunityDetector:
         but timing is bad.
         """
         # Below soft threshold — no action needed.
-        if utilization_pct < 60.0:
+        cfg = config or CompactionConfig()
+        soft_pct = cfg.soft_threshold * 100.0
+        hard_pct = cfg.hard_threshold * 100.0
+        critical_pct = cfg.critical_threshold * 100.0
+
+        if utilization_pct < soft_pct:
             return None
 
         # Not enough history to benefit from compaction.
@@ -88,21 +115,33 @@ class OpportunityDetector:
             return None
 
         # Determine urgency.
-        if utilization_pct >= 90.0:
+        if utilization_pct >= critical_pct:
             priority = Priority.CRITICAL
             reason   = f"Context at {utilization_pct:.0f}% — critical, must compact now"
-        elif utilization_pct >= 80.0:
+        elif utilization_pct >= hard_pct:
             priority = Priority.HIGH
             reason   = f"Context at {utilization_pct:.0f}% — compact at next break"
         else:
             priority = Priority.MEDIUM
             reason   = f"Context at {utilization_pct:.0f}% — good time to compact"
 
+        latest = latest_user_message or self._last_user_message
+        if self._subtask_completed:
+            reason = "Sub-task completed — natural breakpoint for compaction"
+            priority = max(priority, Priority.HIGH, key=_priority_rank)
+        elif self.is_idle:
+            reason = f"User idle for {self.idle_seconds:.0f}s — natural breakpoint for compaction"
+        elif self._tool_output_ready:
+            reason = "Verbose tool output processed — compact summaries are ready"
+            priority = max(priority, Priority.HIGH, key=_priority_rank)
+        elif latest and self._looks_like_topic_shift(latest):
+            reason = "New topic detected — compact before switching focus"
+
         # Check for bad timing.
         safe = self._is_safe_to_compact(priority)
 
         # Estimate savings: tool outputs + older history = ~40–60% of total.
-        estimated_savings = 50.0
+        estimated_savings = 60.0 if self._tool_output_ready else 50.0
 
         return CompactionOpportunity(
             reason=reason,
@@ -117,9 +156,17 @@ class OpportunityDetector:
         utilization_pct: float,
         history_len: int,
         min_turns: int = 4,
+        config: CompactionConfig | None = None,
+        latest_user_message: str = "",
     ) -> bool:
         """True if compaction should proceed immediately."""
-        opp = self.evaluate(utilization_pct, history_len, min_turns)
+        opp = self.evaluate(
+            utilization_pct,
+            history_len,
+            min_turns,
+            config=config,
+            latest_user_message=latest_user_message,
+        )
         if opp is None:
             return False
         if opp.priority == Priority.CRITICAL:
@@ -155,3 +202,29 @@ class OpportunityDetector:
     @property
     def is_idle(self) -> bool:
         return self.idle_seconds >= self._IDLE_THRESHOLD
+
+    def _looks_like_topic_shift(self, latest_user_message: str) -> bool:
+        previous = _keyword_set(self._previous_user_message)
+        current = _keyword_set(latest_user_message)
+        if not previous or not current:
+            return False
+        overlap = len(previous & current)
+        return overlap == 0
+
+
+def _priority_rank(priority: Priority) -> int:
+    order = {
+        Priority.LOW: 0,
+        Priority.MEDIUM: 1,
+        Priority.HIGH: 2,
+        Priority.CRITICAL: 3,
+    }
+    return order[priority]
+
+
+def _keyword_set(text: str) -> set[str]:
+    words = {
+        w for w in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", text.lower())
+        if w not in {"the", "and", "for", "with", "this", "that", "from", "into"}
+    }
+    return words

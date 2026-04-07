@@ -142,10 +142,15 @@ class TokenCounter:
 
         # Conversation history.
         for msg in history:
-            content = msg.get("content", "")
+            content = self._stringify_content(msg.get("content", ""))
             role = msg.get("role", "user")
-            is_code = role == "assistant"  # heuristic: assistant responses often code-heavy
-            usage.history_tokens += self.count(content, is_code=is_code)
+            if not content:
+                continue
+            if self._looks_like_tool_output(content, role):
+                usage.tool_output_tokens += self.count(content, is_code=True)
+            else:
+                is_code = role == "assistant"
+                usage.history_tokens += self.count(content, is_code=is_code)
 
         return usage
 
@@ -193,3 +198,43 @@ class TokenCounter:
             self._tiktoken_enc = tiktoken.get_encoding(enc_name)
         except Exception:
             log.debug("tiktoken not available — using character heuristic")
+
+    @staticmethod
+    def _stringify_content(content: object) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content") or item.get("output") or ""
+                    if text:
+                        parts.append(str(text))
+                elif item:
+                    parts.append(str(item))
+            return "\n".join(parts)
+        if isinstance(content, dict):
+            return str(content.get("text") or content.get("content") or "")
+        return str(content) if content else ""
+
+    @staticmethod
+    def _looks_like_tool_output(content: str, role: str) -> bool:
+        if role == "tool":
+            return True
+        lines = content.splitlines()
+        if len(lines) >= 40:
+            return True
+        lowered = content.lower()
+        strong_indicators = (
+            "traceback",
+            "diff --git",
+            "@@ ",
+            "stdout",
+            "stderr",
+            "lines omitted",
+        )
+        if any(ind in lowered for ind in strong_indicators):
+            return True
+        if len(lines) >= 20 and any(ind in lowered for ind in ("error:", "warning:")):
+            return True
+        return False
