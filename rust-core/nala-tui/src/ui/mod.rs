@@ -7,6 +7,7 @@ pub mod agent_panel;
 pub mod command_bar;
 pub mod diff;
 pub mod file_panel;
+pub mod help;
 pub mod layout;
 pub mod markdown;
 pub mod session_panel;

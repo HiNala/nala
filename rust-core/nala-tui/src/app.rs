@@ -31,6 +31,7 @@ pub enum AppMode {
     Analyzing,
     Viewing,
     Confirming,
+    Help,
 }
 
 impl std::fmt::Display for AppMode {
@@ -41,6 +42,7 @@ impl std::fmt::Display for AppMode {
             Self::Analyzing => write!(f, "ANALYZING"),
             Self::Viewing => write!(f, "VIEWING"),
             Self::Confirming => write!(f, "CONFIRM"),
+            Self::Help => write!(f, "HELP"),
         }
     }
 }
@@ -569,6 +571,28 @@ impl App {
             }
         }
 
+        // ? key: toggle help overlay (no modifier required)
+        if key.modifiers == KeyModifiers::NONE && key.code == Char('?') {
+            if self.mode == AppMode::Help {
+                self.mode = AppMode::Ready;
+            } else if self.input.is_empty() {
+                // Only open help when the input field is empty to avoid
+                // eating '?' when the user is typing a query
+                self.mode = AppMode::Help;
+            } else {
+                // '?' in the middle of typing — treat as regular character
+                self.input.insert(self.cursor_pos, '?');
+                self.cursor_pos += 1;
+            }
+            return;
+        }
+
+        // Any key closes the help overlay
+        if self.mode == AppMode::Help && key.code != KeyCode::F(1) {
+            self.mode = AppMode::Ready;
+            return;
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 Char('c') | Char('q') => {
@@ -585,6 +609,22 @@ impl App {
                 }
                 Char('g') => {
                     self.agent_panel_open = !self.agent_panel_open;
+                    return;
+                }
+                // Ctrl+U: half-page scroll up
+                Char('u') => {
+                    let half = (self.last_area_height as usize / 2).max(3);
+                    self.scroll_offset = self.scroll_offset.saturating_add(half);
+                    self.scroll_locked_to_bottom = false;
+                    return;
+                }
+                // Ctrl+D: half-page scroll down
+                Char('d') => {
+                    let half = (self.last_area_height as usize / 2).max(3);
+                    self.scroll_offset = self.scroll_offset.saturating_sub(half);
+                    if self.scroll_offset == 0 {
+                        self.scroll_locked_to_bottom = true;
+                    }
                     return;
                 }
                 Left => {

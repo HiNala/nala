@@ -15,7 +15,8 @@
 
 use crate::app::{App, AppMode, MessageKind};
 use crate::ui::{
-    agent_panel, command_bar, diff, file_panel, markdown, session_panel, splash, status_bar, theme,
+    agent_panel, command_bar, diff, file_panel, help, markdown, session_panel, splash, status_bar,
+    theme,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -44,6 +45,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     command_bar::render(frame, app, outer[1]);
     status_bar::render(frame, app, outer[2]);
+
+    // Help overlay is rendered on top of everything else
+    if app.mode == AppMode::Help {
+        help::render(frame, area);
+    }
 }
 
 fn render_body(frame: &mut Frame, app: &App, area: Rect) {
